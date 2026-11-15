@@ -437,6 +437,20 @@ $generalTweaks = @(
            (RegD "$HKCU\Microsoft\Windows\CurrentVersion\Themes\Personalize" 'AppsUseLightTheme' 0),
            (RegD "$HKCU\Microsoft\Windows\CurrentVersion\Themes\Personalize" 'SystemUsesLightTheme' 0) ) }
 
+    @{ Name='Disable transparency / blur'; Default=$false; Desc='Turns off the acrylic blur on Start, taskbar and windows. Tiny GPU saving; purely a look choice.'
+       Actions=@( (RegD "$HKCU\Microsoft\Windows\CurrentVersion\Themes\Personalize" 'EnableTransparency' 0) ) }
+
+    @{ Name='Disable window animations'; Default=$false; Desc='No minimize/maximize and taskbar animations - feels snappier.'
+       Actions=@(
+           (RegS 'HKCU:\Control Panel\Desktop\WindowMetrics' 'MinAnimate' '0'),
+           (RegD "$HKCU\Microsoft\Windows\CurrentVersion\Explorer\Advanced" 'TaskbarAnimations' 0) ) }
+
+    @{ Name='Faster menus'; Default=$true; Desc='Removes the delay before menus open (MenuShowDelay = 0).'
+       Actions=@( (RegS 'HKCU:\Control Panel\Desktop' 'MenuShowDelay' '0') ) }
+
+    @{ Name='Remove startup app delay'; Default=$true; Desc='Startup apps launch right away instead of being held back after login.'
+       Actions=@( (RegD "$HKCU\Microsoft\Windows\CurrentVersion\Explorer\Serialize" 'StartupDelayInMSec' 0) ) }
+
     @{ Name='Hide the taskbar Search box'; Default=$true; Desc='Removes the big search field from the taskbar.'
        Actions=@( (RegD "$HKCU\Microsoft\Windows\CurrentVersion\Search" 'SearchboxTaskbarMode' 0) ) }
 
@@ -555,6 +569,42 @@ $privacyTweaks = @(
 
 # ---- PERFORMANCE ----
 $perfTweaks = @(
+    @{ Name='NullTweak Competitive power plan'; Default=$true
+       Desc='Custom plan based on Ultimate Performance: CPU always 100%, no core parking, aggressive boost, USB/PCIe power saving off, no disk/sleep timeouts. Best for competitive games. Uses more power - on a laptop, applies only when plugged in.'
+       Actions=@( @{ Type='Cmd'; Script={
+            $planName = 'NullTweak Competitive'
+            $list = powercfg /list | Out-String
+            $g = $null
+            if ($list -match "([0-9a-fA-F\-]{36})\s+\($planName\)") { $g = $matches[1] }
+            if (-not $g) {
+                # Ultimate Performance base; fall back to High Performance
+                $out = powercfg -duplicatescheme e9a42b02-d5df-448d-aa00-03f14749eb61 2>$null | Out-String
+                if ($out -notmatch '([0-9a-fA-F\-]{36})') {
+                    $out = powercfg -duplicatescheme 8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c 2>$null | Out-String
+                }
+                if ($out -match '([0-9a-fA-F\-]{36})') { $g = $matches[1] }
+                if ($g) { powercfg -changename $g $planName 'Low-latency plan for competitive gaming (NullTweak)' | Out-Null }
+            }
+            if (-not $g) { Write-Log '  ! Could not create power plan.'; return }
+
+            # CPU: min/max 100%, aggressive boost, no core parking
+            powercfg -setacvalueindex $g SUB_PROCESSOR PROCTHROTTLEMIN 100 | Out-Null
+            powercfg -setacvalueindex $g SUB_PROCESSOR PROCTHROTTLEMAX 100 | Out-Null
+            powercfg -setacvalueindex $g SUB_PROCESSOR PERFBOOSTMODE 2      | Out-Null
+            powercfg -setacvalueindex $g SUB_PROCESSOR CPMINCORES 100       | Out-Null
+            # USB selective suspend off
+            powercfg -setacvalueindex $g 2a737441-1930-4402-8d77-b2bebba308a3 48e6b7a6-50f5-4782-a5d4-53bb8f07e226 0 | Out-Null
+            # PCIe link state power management off
+            powercfg -setacvalueindex $g SUB_PCIEXPRESS ASPM 0 | Out-Null
+            # Never turn off disk, never sleep/hibernate
+            powercfg -setacvalueindex $g SUB_DISK DISKIDLE 0       | Out-Null
+            powercfg -setacvalueindex $g SUB_SLEEP STANDBYIDLE 0   | Out-Null
+            powercfg -setacvalueindex $g SUB_SLEEP HIBERNATEIDLE 0 | Out-Null
+
+            powercfg -setactive $g | Out-Null
+            Write-Log "  Power plan '$planName' active."
+       } } ) }
+
     @{ Name='Enable Game Mode'; Default=$true; Desc='Prioritize the active game.'
        Actions=@(
            (RegD "$HKCU\Microsoft\GameBar" 'AutoGameModeEnabled' 1),
@@ -578,19 +628,70 @@ $perfTweaks = @(
            (RegD "$HKCU\Microsoft\Windows\CurrentVersion\BackgroundAccessApplications" 'GlobalUserDisabled' 1),
            (RegD "$HKLM\Policies\Microsoft\Windows\AppPrivacy" 'LetAppsRunInBackground' 2) ) }
 
-    @{ Name='Disable fullscreen optimizations (power throttling off)'; Default=$false
-       Desc='Sets PowerThrottlingOff - can help frametimes on some systems.'
+    @{ Name='Disable power throttling'; Default=$true
+       Desc='Stops Windows from slowing down background/game processes to save power.'
        Actions=@( (RegD 'HKLM:\SYSTEM\CurrentControlSet\Control\Power\PowerThrottling' 'PowerThrottlingOff' 1) ) }
+
+    @{ Name='Disable fullscreen optimizations'; Default=$true
+       Desc='Gives games true exclusive fullscreen - can lower input lag in competitive titles.'
+       Actions=@(
+           (RegD 'HKCU:\System\GameConfigStore' 'GameDVR_FSEBehaviorMode' 2),
+           (RegD 'HKCU:\System\GameConfigStore' 'GameDVR_HonorUserFSEBehaviorMode' 1),
+           (RegD 'HKCU:\System\GameConfigStore' 'GameDVR_FSEBehavior' 2),
+           (RegD 'HKCU:\System\GameConfigStore' 'GameDVR_DXGIHonorFSEWindowsCompatible' 1) ) }
+
+    @{ Name='Prioritize games (CPU/GPU scheduling)'; Default=$true
+       Desc='Raises the Games multimedia profile to high CPU/GPU priority and reserves less CPU for background tasks.'
+       Actions=@(
+           (RegD 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile' 'SystemResponsiveness' 0),
+           (RegD 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile' 'NetworkThrottlingIndex' 0xffffffff),
+           (RegD 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile\Tasks\Games' 'GPU Priority' 8),
+           (RegD 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile\Tasks\Games' 'Priority' 6),
+           (RegS 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile\Tasks\Games' 'Scheduling Category' 'High'),
+           (RegS 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile\Tasks\Games' 'SFIO Priority' 'High') ) }
+
+    @{ Name='Disable mouse acceleration'; Default=$true
+       Desc='Turns off "Enhance pointer precision" - 1:1 raw aim, standard for FPS games.'
+       Actions=@(
+           (RegS 'HKCU:\Control Panel\Mouse' 'MouseSpeed' '0'),
+           (RegS 'HKCU:\Control Panel\Mouse' 'MouseThreshold1' '0'),
+           (RegS 'HKCU:\Control Panel\Mouse' 'MouseThreshold2' '0') ) }
+
+    @{ Name='Hardware-accelerated GPU scheduling'; Default=$false
+       Desc='Lets the GPU manage its own memory. Helps on many RTX/RX cards, hurts on some - try it and compare. Reboot required.'
+       Actions=@( (RegD 'HKLM:\SYSTEM\CurrentControlSet\Control\GraphicsDrivers' 'HwSchMode' 2) ) }
+
+    @{ Name='Lower network latency (disable Nagle)'; Default=$false
+       Desc='Sends small packets immediately on all network adapters. Can reduce ping jitter in online games.'
+       Actions=@( @{ Type='Cmd'; Script={
+            Get-ChildItem 'HKLM:\SYSTEM\CurrentControlSet\Services\Tcpip\Parameters\Interfaces' -ErrorAction SilentlyContinue |
+                ForEach-Object {
+                    New-ItemProperty -Path $_.PSPath -Name 'TcpAckFrequency' -PropertyType DWord -Value 1 -Force | Out-Null
+                    New-ItemProperty -Path $_.PSPath -Name 'TCPNoDelay'      -PropertyType DWord -Value 1 -Force | Out-Null
+                }
+       } } ) }
+
+    @{ Name='Disable SysMain (Superfetch)'; Default=$false
+       Desc='Stops background preloading. Good on SSDs to cut random disk/CPU usage; leave on for HDDs.'
+       Actions=@( (Svc 'SysMain') ) }
+
+    @{ Name='Disable hibernation'; Default=$false
+       Desc='Removes hiberfil.sys (frees several GB) and disables Fast Startup. Laptops lose hibernate.'
+       Actions=@( @{ Type='Cmd'; Script={ powercfg -h off | Out-Null } } ) }
+
+    @{ Name='Disable Delivery Optimization P2P'; Default=$true
+       Desc='Stops Windows using your upload bandwidth to share updates with other PCs.'
+       Actions=@( (RegD "$HKLM\Policies\Microsoft\Windows\DeliveryOptimization" 'DODownloadMode' 0) ) }
 
     @{ Name='Enable Long Paths (>260 chars)'; Default=$true; Desc='Allow long file paths.'
        Actions=@( (RegD 'HKLM:\SYSTEM\CurrentControlSet\Control\FileSystem' 'LongPathsEnabled' 1) ) }
 
     @{ Name='Restore classic Photo Viewer'; Default=$false; Desc='Re-register Windows Photo Viewer for common image types.'
        Actions=@( @{ Type='Cmd'; Script={
-            $base = 'HKLM:\SOFTWARE\Classes'
-            foreach ($ext in '.jpg','.jpeg','.png','.bmp','.gif','.tif','.tiff') {
-                $k = Join-Path $base $ext
-                if (-not (Test-Path $k)) { New-Item -Path $k -Force | Out-Null }
+            $assoc = 'HKLM:\SOFTWARE\Microsoft\Windows Photo Viewer\Capabilities\FileAssociations'
+            if (-not (Test-Path $assoc)) { New-Item -Path $assoc -Force | Out-Null }
+            foreach ($ext in '.jpg','.jpeg','.png','.bmp','.gif','.tif','.tiff','.ico') {
+                New-ItemProperty -Path $assoc -Name $ext -Value 'PhotoViewer.FileAssoc.Tiff' -PropertyType String -Force | Out-Null
             }
             $cmd = '%SystemRoot%\System32\rundll32.exe "%ProgramFiles%\Windows Photo Viewer\PhotoViewer.dll", ImageView_Fullscreen %1'
             $shellKey = 'HKLM:\SOFTWARE\Classes\PhotoViewer.FileAssoc.Tiff\shell\open\command'
@@ -660,8 +761,12 @@ $win11Tweaks = @(
     @{ Name='Hide Task View button'; Default=$true; Desc='Remove Task View from the taskbar.'
        Actions=@( (RegD "$HKCU\Microsoft\Windows\CurrentVersion\Explorer\Advanced" 'ShowTaskViewButton' 0) ) }
 
-    @{ Name='Hide Widgets button'; Default=$true; Desc='Remove the Widgets icon.'
-       Actions=@( (RegD "$HKCU\Microsoft\Windows\CurrentVersion\Explorer\Advanced" 'TaskbarDa' 0) ) }
+    @{ Name='Hide Widgets button'; Default=$true; Desc='Remove the Widgets icon (policy method - works on 24H2+).'
+       Actions=@(
+           (RegD "$HKLM\Policies\Microsoft\Dsh" 'AllowNewsAndInterests' 0),
+           @{ Type='Cmd'; Script={
+                try { Set-ItemProperty -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced' -Name 'TaskbarDa' -Value 0 -Type DWord -ErrorAction Stop } catch {}
+           } } ) }
 
     @{ Name='Hide Chat / Teams button'; Default=$true; Desc='Remove the consumer Teams Chat icon.'
        Actions=@( (RegD "$HKCU\Microsoft\Windows\CurrentVersion\Explorer\Advanced" 'TaskbarMn' 0) ) }
@@ -949,7 +1054,11 @@ $ctrl.ApplyBtn.Add_Click({
         $done++
     }
     # restart explorer so taskbar/visual tweaks show
-    try { Stop-Process -Name explorer -Force -ErrorAction SilentlyContinue } catch {}
+    try {
+        Stop-Process -Name explorer -Force -ErrorAction SilentlyContinue
+        Start-Sleep -Seconds 2
+        if (-not (Get-Process -Name explorer -ErrorAction SilentlyContinue)) { Start-Process explorer.exe }
+    } catch {}
     Write-Log "Done. Applied $done tweak(s)$(if($fail){", $fail action(s) had issues"}). Some changes need a reboot."
     $ctrl.ApplyBtn.IsEnabled = $true
 })
