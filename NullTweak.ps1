@@ -273,8 +273,36 @@ $xaml = @'
                         <StackPanel Name="DebloatPanel"/>
                     </ScrollViewer>
                     <Border Grid.Row="2" Background="#FF1C1C20" Padding="22,12">
-                        <Button Name="RemoveApps" Style="{StaticResource Danger}"
-                                Content="Remove Selected Apps" HorizontalAlignment="Left"/>
+                        <StackPanel Orientation="Horizontal">
+                            <Button Name="RemoveApps" Style="{StaticResource Danger}"
+                                    Content="Remove Selected Apps"/>
+                            <Button Name="FixXboxBtn" Style="{StaticResource Ghost}" Margin="10,0,0,0"
+                                    Content="Fix Xbox / Gaming Services"
+                                    ToolTip="Runs Microsoft's Gaming Services Repair Tool, restores Xbox services, and reinstalls Gaming Services / Xbox app if broken or missing."/>
+                        </StackPanel>
+                    </Border>
+                </Grid>
+            </TabItem>
+            <TabItem Header="Restore Apps">
+                <Grid>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="*"/>
+                        <RowDefinition Height="Auto"/>
+                    </Grid.RowDefinitions>
+                    <StackPanel Grid.Row="0" Orientation="Horizontal" Margin="22,14,22,4">
+                        <TextBlock Name="ReinstallHeader" Text="Apps you removed with Debloat:"
+                                   Foreground="#FF9A9AA2" FontSize="12" VerticalAlignment="Center"/>
+                        <Button Name="ReinstallAll"     Style="{StaticResource Link}" Content="select all"/>
+                        <Button Name="ReinstallNone"    Style="{StaticResource Link}" Content="none"/>
+                        <Button Name="ReinstallShowAll" Style="{StaticResource Link}" Content="show all missing Microsoft apps"/>
+                    </StackPanel>
+                    <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto" Padding="22,4">
+                        <StackPanel Name="ReinstallPanel"/>
+                    </ScrollViewer>
+                    <Border Grid.Row="2" Background="#FF1C1C20" Padding="22,12">
+                        <Button Name="ReinstallBtn" Style="{StaticResource Accent}"
+                                Content="Reinstall Selected Apps" HorizontalAlignment="Left"/>
                     </Border>
                 </Grid>
             </TabItem>
@@ -310,6 +338,13 @@ $xaml = @'
                                    Text="Tweaks are drawn from well-known community sources (Chris Titus WinUtil, WinAero, O&amp;O ShutUp10-style privacy defaults) and are reversible. Make a restore point first - the button is at the bottom of every tab."/>
                         <TextBlock Foreground="#FFCF8A5A" FontSize="12" TextWrapping="Wrap" Margin="0,12,0,0"
                                    Text="Items marked (!) reduce a security or safety feature (e.g. SmartScreen, Core Isolation, Defender). They're optional and off or clearly flagged. Only enable them if you understand the trade-off."/>
+
+                        <Border Height="1" Background="#FF2E2E34" Margin="0,20,0,16"/>
+                        <TextBlock Foreground="#FFE4E4E6" FontSize="14" FontWeight="SemiBold" Text="Extreme mode"/>
+                        <TextBlock Foreground="#FF9A9AA2" FontSize="12" TextWrapping="Wrap" Margin="0,6,0,10"
+                                   Text="Ticks every tweak across all tabs at once - privacy, performance, visual effects, services, Win 10/11 - for maximum speed on old or weak PCs. It won't auto-disable Windows Defender. Nothing is applied until you click 'Apply Selected Tweaks'."/>
+                        <Button Name="ExtremeBtn" Style="{StaticResource Danger}"
+                                Content="EXTREME - select everything" HorizontalAlignment="Left"/>
                     </StackPanel>
                 </ScrollViewer>
             </TabItem>
@@ -346,10 +381,12 @@ $win    = [Windows.Markup.XamlReader]::Load($reader)
 
 # grab named controls
 $ctrl = @{}
-foreach ($n in 'OsLabel','GeneralPanel','VersionPanel','VersionTab','PrivacyPanel','PerfPanel',
+foreach ($n in 'Tabs','OsLabel','GeneralPanel','VersionPanel','VersionTab','PrivacyPanel','PerfPanel',
                 'AdvancedPanel','DebloatPanel','LogBox','RestoreBtn','ApplyBtn','RemoveApps',
                 'BloatAll','BloatNone','BloatRefresh',
-                'InstallPanel','InstallBtn','InstallAll','InstallNone') {
+                'InstallPanel','InstallBtn','InstallAll','InstallNone',
+                'ReinstallPanel','ReinstallBtn','ReinstallAll','ReinstallNone','ReinstallShowAll','ReinstallHeader',
+                'FixXboxBtn','ExtremeBtn') {
     $ctrl[$n] = $win.FindName($n)
 }
 $ctrl.OsLabel.Text        = $osLabel
@@ -560,7 +597,7 @@ $privacyTweaks = @(
     @{ Name='Disable Visual Studio telemetry'; Default=$true; Desc='Opt out of VS SQM.'
        Actions=@( (RegD "$HKLM\Policies\Microsoft\VisualStudio\SQM" 'OptIn' 0) ) }
 
-    @{ Name='Disable SmartScreen  (!)'; Default=$false; Warn=$true
+    @{ Name='Disable SmartScreen  (!)'; Default=$true; Warn=$true
        Desc='(!) Turns off SmartScreen app/file reputation checks. Reduces protection against malicious downloads.'
        Actions=@(
            (RegD "$HKLM\Policies\Microsoft\Windows\System" 'EnableSmartScreen' 0),
@@ -616,7 +653,7 @@ $perfTweaks = @(
            (RegD 'HKCU:\System\GameConfigStore' 'GameDVR_Enabled' 0),
            (RegD "$HKLM\Policies\Microsoft\Windows\GameDVR" 'AllowGameDVR' 0) ) }
 
-    @{ Name='Disable Xbox Live services'; Default=$true; Desc='Disable Xbox auth/save/networking services.'
+    @{ Name='Disable Xbox Live services'; Default=$true; Desc='Disable Xbox auth/save/networking services. Turn this off if you use the Xbox app or Game Pass (Debloat > Fix Xbox undoes it).'
        Actions=@( (Svc 'XblAuthManager'), (Svc 'XblGameSave'), (Svc 'XboxGipSvc'), (Svc 'XboxNetApiSvc') ) }
 
     @{ Name='Win32PrioritySeparation = 40 (foreground responsiveness)'; Default=$true
@@ -627,6 +664,29 @@ $perfTweaks = @(
        Actions=@(
            (RegD "$HKCU\Microsoft\Windows\CurrentVersion\BackgroundAccessApplications" 'GlobalUserDisabled' 1),
            (RegD "$HKLM\Policies\Microsoft\Windows\AppPrivacy" 'LetAppsRunInBackground' 2) ) }
+
+    @{ Name='Disable all visual effects (best performance)'; Default=$false
+       Desc='Sets Performance Options to "Adjust for best performance" - turns off every animation, fade, shadow, thumbnail and smooth-font effect. Flat and fast, best for old/weak PCs. Included in Extreme mode.'
+       Actions=@( @{ Type='Cmd'; Script={
+            $d = 'HKCU:\Control Panel\Desktop'
+            New-ItemProperty -Path $d -Name 'UserPreferencesMask' -PropertyType Binary -Value ([byte[]](0x90,0x12,0x03,0x80,0x10,0x00,0x00,0x00)) -Force | Out-Null
+            Set-ItemProperty -Path $d -Name 'DragFullWindows' -Value '0' -Force
+            Set-ItemProperty -Path $d -Name 'FontSmoothing'   -Value '0' -Force
+            $wm = 'HKCU:\Control Panel\Desktop\WindowMetrics'
+            if (-not (Test-Path $wm)) { New-Item -Path $wm -Force | Out-Null }
+            Set-ItemProperty -Path $wm -Name 'MinAnimate' -Value '0' -Force
+            $adv = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced'
+            Set-ItemProperty -Path $adv -Name 'TaskbarAnimations'   -Value 0 -Type DWord -Force
+            Set-ItemProperty -Path $adv -Name 'ListviewAlphaSelect' -Value 0 -Type DWord -Force
+            Set-ItemProperty -Path $adv -Name 'ListviewShadow'      -Value 0 -Type DWord -Force
+            Set-ItemProperty -Path $adv -Name 'IconsOnly'           -Value 1 -Type DWord -Force
+            $dwm = 'HKCU:\Software\Microsoft\Windows\DWM'
+            if (-not (Test-Path $dwm)) { New-Item -Path $dwm -Force | Out-Null }
+            Set-ItemProperty -Path $dwm -Name 'EnableAeroPeek' -Value 0 -Type DWord -Force
+            $vfx = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\VisualEffects'
+            if (-not (Test-Path $vfx)) { New-Item -Path $vfx -Force | Out-Null }
+            Set-ItemProperty -Path $vfx -Name 'VisualFXSetting' -Value 3 -Type DWord -Force
+       } } ) }
 
     @{ Name='Disable power throttling'; Default=$true
        Desc='Stops Windows from slowing down background/game processes to save power.'
@@ -716,7 +776,7 @@ $perfTweaks = @(
 
 # ---- ADVANCED (security trade-offs / power-user) ----
 $advancedTweaks = @(
-    @{ Name='Disable Core Isolation / Memory Integrity  (!)'; Default=$false; Warn=$true
+    @{ Name='Disable Core Isolation / Memory Integrity  (!)'; Default=$true; Warn=$true
        Desc='(!) Disables HVCI. Microsoft suggests this for gaming performance, but it lowers kernel protection. Reboot required.'
        Actions=@( (RegD 'HKLM:\SYSTEM\CurrentControlSet\Control\DeviceGuard\Scenarios\HypervisorEnforcedCodeIntegrity' 'Enabled' 0) ) }
 
@@ -873,7 +933,7 @@ $bloatMap = [ordered]@{
     'Microsoft.XboxGamingOverlay'           = 'Xbox Game Bar Overlay'
     'Microsoft.XboxGameOverlay'             = 'Xbox Game Overlay'
     'Microsoft.Xbox.TCUI'                   = 'Xbox TCUI'
-    'Microsoft.XboxIdentityProvider'        = 'Xbox Identity Provider'
+    'Microsoft.XboxIdentityProvider'        = 'Xbox Identity Provider (needed for Xbox sign-in in games)'
     'Microsoft.XboxSpeechToTextOverlay'     = 'Xbox Speech-To-Text'
     'Microsoft.MicrosoftSolitaireCollection'= 'Solitaire Collection'
     'Microsoft.People'                      = 'People'
@@ -955,6 +1015,221 @@ function Load-Bloat {
     Write-Log "Debloat list loaded: $shown app(s) found."
 }
 Load-Bloat
+
+# ---------------------------------------------------------------------------
+# 11a. Restore Apps tab - reinstall apps removed with Debloat
+# ---------------------------------------------------------------------------
+$script:RemovedLog = Join-Path $env:ProgramData 'NullTweak\removed-apps.json'
+
+function Get-RemovedApps {
+    if (-not (Test-Path $script:RemovedLog)) { return @() }
+    try {
+        $raw = Get-Content -Path $script:RemovedLog -Raw -ErrorAction Stop
+        if (-not $raw) { return @() }
+        return @(($raw | ConvertFrom-Json) | ForEach-Object { $_ })
+    } catch { return @() }
+}
+
+function Save-RemovedApps($list) {
+    $dir = Split-Path $script:RemovedLog
+    if (-not (Test-Path $dir)) { New-Item -Path $dir -ItemType Directory -Force | Out-Null }
+    ConvertTo-Json -InputObject @($list) -Depth 3 | Set-Content -Path $script:RemovedLog -Encoding UTF8 -Force
+}
+
+# Microsoft Store product IDs used to reinstall (prefix-matched like $bloatMap).
+# If an ID is missing or winget fails, the app's Store page opens instead.
+$storeIds = @{
+    'Microsoft.BingWeather'                  = '9WZDNCRFJ3Q2'
+    'Microsoft.BingNews'                     = '9WZDNCRFHVFW'
+    'Microsoft.GamingApp'                    = '9MV0B5HZVK9Z'
+    'Microsoft.XboxGamingOverlay'            = '9NZKPSTSNW4P'
+    'Microsoft.XboxIdentityProvider'         = '9WZDNCRD1HKW'
+    'Microsoft.GamingServices'               = '9MWPM2CQNLHN'
+    'Microsoft.MicrosoftSolitaireCollection' = '9WZDNCRFHWD2'
+    'Microsoft.ZuneMusic'                    = '9WZDNCRFJ3PT'
+    'Microsoft.ZuneVideo'                    = '9WZDNCRFJ3P2'
+    'Microsoft.YourPhone'                    = '9NMPJ99VJBWV'
+    'Microsoft.WindowsFeedbackHub'           = '9NBLGGH4R32N'
+    'Microsoft.WindowsMaps'                  = '9WZDNCRDTBVB'
+    'Microsoft.Todos'                        = '9NBLGGH5R558'
+    'Microsoft.MicrosoftStickyNotes'         = '9NBLGGH4QGHW'
+    'Microsoft.WindowsSoundRecorder'         = '9WZDNCRFHWKN'
+    'Clipchamp.Clipchamp'                    = '9P1J8S7CCWWT'
+    'Microsoft.PowerAutomateDesktop'         = '9NFTCH6J7FHV'
+    'Microsoft.OutlookForWindows'            = '9NRX63209R7B'
+    'MSTeams'                                = 'XP8BT8DW290MPQ'
+    'Microsoft.Windows.DevHome'              = '9N8MHTPHNGVV'
+    'Microsoft.QuickAssist'                  = '9P7BP5VNWKX5'
+    'Microsoft.Whiteboard'                   = '9MSPC6MP8FM4'
+    'Microsoft.MicrosoftOfficeHub'           = '9WZDNCRD29V9'
+    'Microsoft.Office.OneNote'               = '9WZDNCRFHVJL'
+    'Microsoft.windowscommunicationsapps'    = '9WZDNCRFHVQM'
+    'Microsoft.GetHelp'                      = '9PKDZBMV1H3T'
+    'Microsoft.Microsoft3DViewer'            = '9NBLGGH42THS'
+    'Microsoft.SkypeApp'                     = '9WZDNCRFJ364'
+    'Microsoft.MicrosoftJournal'             = '9N318R854RHH'
+}
+
+function Get-StoreId($name) {
+    foreach ($k in $storeIds.Keys) { if ($name -like "$k*") { return $storeIds[$k] } }
+    return ''
+}
+
+$script:ReinstallCheckBoxes = New-Object System.Collections.ArrayList
+$script:ReinstallShowAll    = $false
+
+function Load-Restore {
+    $ctrl.ReinstallPanel.Children.Clear()
+    $script:ReinstallCheckBoxes.Clear()
+
+    $installed = @{}
+    try { Get-AppxPackage -ErrorAction SilentlyContinue | ForEach-Object { $installed[$_.Name] = $true } } catch {}
+
+    $items = New-Object System.Collections.ArrayList
+    $seen  = @{}
+    foreach ($r in (Get-RemovedApps)) {
+        if ($r.Name -and -not $installed[$r.Name] -and -not $seen[$r.Name]) {
+            [void]$items.Add([pscustomobject]@{ Name = $r.Name; Label = $r.Label })
+            $seen[$r.Name] = $true
+        }
+    }
+    if ($script:ReinstallShowAll) {
+        foreach ($k in $bloatMap.Keys) {
+            $isInstalled = $installed.Keys | Where-Object { $_ -like "$k*" } | Select-Object -First 1
+            if (-not $isInstalled -and -not $seen[$k]) {
+                [void]$items.Add([pscustomobject]@{ Name = $k; Label = $bloatMap[$k] })
+                $seen[$k] = $true
+            }
+        }
+        $ctrl.ReinstallHeader.Text = 'Removed apps + every known Microsoft app not installed:'
+        $ctrl.ReinstallShowAll.Content = 'show only apps I removed'
+    } else {
+        $ctrl.ReinstallHeader.Text = 'Apps you removed with Debloat:'
+        $ctrl.ReinstallShowAll.Content = 'show all missing Microsoft apps'
+    }
+
+    if ($items.Count -eq 0) {
+        $tb = New-Object Windows.Controls.TextBlock
+        $tb.Text = if ($script:ReinstallShowAll) { 'Every known Microsoft app is already installed.' } `
+                   else { 'Nothing removed yet. Apps you remove in the Debloat tab will show up here so you can reinstall them.' }
+        $tb.Foreground = '#FF77777E'; $tb.FontSize = 12; $tb.TextWrapping = 'Wrap'; $tb.Margin = '0,8,0,0'
+        [void]$ctrl.ReinstallPanel.Children.Add($tb)
+        return
+    }
+    foreach ($it in $items) {
+        $cb = New-Object Windows.Controls.CheckBox
+        $cb.Content   = $it.Label
+        $cb.IsChecked = $false
+        $cb.ToolTip   = $it.Name
+        $cb.Tag       = $it
+        [void]$ctrl.ReinstallPanel.Children.Add($cb)
+        [void]$script:ReinstallCheckBoxes.Add($cb)
+    }
+}
+Load-Restore
+
+# ---------------------------------------------------------------------------
+# 11a-2. Xbox / Gaming Services repair (used by Fix Xbox + Xbox reinstalls)
+# ---------------------------------------------------------------------------
+# Restore the Xbox services NullTweak's "Disable Xbox Live services" turns off.
+$script:XboxSvcBlock = @'
+function Step($t) { Write-Host ''; Write-Host ">> $t" -ForegroundColor Yellow }
+Step 'Restoring Xbox services to Windows defaults (Manual)'
+foreach ($s in 'XblAuthManager','XblGameSave','XboxGipSvc','XboxNetApiSvc') {
+    $k = "HKLM:\SYSTEM\CurrentControlSet\Services\$s"
+    if (Test-Path $k) {
+        Set-ItemProperty -Path $k -Name 'Start' -Value 3 -Type DWord -Force
+        Write-Host "   $s -> Manual"
+    }
+}
+'@
+
+# Make sure Gaming Services is installed and actually runs; clean-reinstall if broken.
+$script:GamingSvcBlock = @'
+Step 'Checking Gaming Services'
+$gs = Get-AppxPackage -AllUsers -Name 'Microsoft.GamingServices' -ErrorAction SilentlyContinue
+$healthy = $false
+if ($gs) { try { Start-Service -Name 'GamingServices' -ErrorAction Stop; $healthy = $true } catch { } }
+if ($healthy) {
+    Write-Host '   Gaming Services is installed and running.' -ForegroundColor Green
+} else {
+    if ($gs) {
+        Write-Host '   Gaming Services is broken - removing it for a clean reinstall...'
+        Get-AppxPackage -AllUsers -Name '*GamingServices*' | Remove-AppxPackage -AllUsers -ErrorAction SilentlyContinue
+    }
+    Write-Host '   Installing Gaming Services from the Microsoft Store...'
+    winget install --id 9MWPM2CQNLHN --source msstore -e --accept-package-agreements --accept-source-agreements
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host '   Opening the Gaming Services Store page - click Get there.' -ForegroundColor Cyan
+        Start-Process 'ms-windows-store://pdp/?productid=9MWPM2CQNLHN'
+    }
+}
+'@
+
+# Full repair flow for the Fix Xbox button.
+$script:XboxFixScript = @'
+$ErrorActionPreference = 'Continue'
+Write-Host 'NullTweak - Xbox / Gaming Services repair' -ForegroundColor Cyan
+'@ + "`r`n" + $script:XboxSvcBlock + "`r`n" + @'
+Step 'Resetting the Microsoft Store cache'
+Start-Process -FilePath 'wsreset.exe' -Wait
+Write-Host '   Store cache cleared (the Store may open - you can close it).'
+
+Step 'Running Microsoft Gaming Services Repair Tool'
+$tool = $null
+winget install --id Microsoft.Gaming.GamingServicesRepairTool -e --accept-package-agreements --accept-source-agreements
+$pk = Join-Path $env:LOCALAPPDATA 'Microsoft\WinGet\Packages'
+if (Test-Path $pk) {
+    $tool = Get-ChildItem -Path $pk -Recurse -Filter '*.exe' -ErrorAction SilentlyContinue |
+            Where-Object { $_.FullName -like '*GamingServicesRepairTool*' } | Select-Object -First 1
+}
+if (-not $tool) {
+    $dl = Join-Path $env:TEMP 'GamingRepairTool.exe'
+    try {
+        Invoke-WebRequest -Uri 'https://aka.ms/GamingRepairTool' -OutFile $dl -UseBasicParsing
+        $tool = Get-Item $dl
+    } catch { Write-Host '   Could not download the repair tool.' -ForegroundColor Red }
+}
+if ($tool) {
+    $sig = Get-AuthenticodeSignature -FilePath $tool.FullName
+    if ($sig.Status -eq 'Valid' -and $sig.SignerCertificate.Subject -like '*Microsoft*') {
+        Write-Host "   Running $($tool.Name) - follow any prompts in its window..."
+        Start-Process -FilePath $tool.FullName -Wait
+    } else {
+        Write-Host '   Skipped: the downloaded tool is not signed by Microsoft.' -ForegroundColor Red
+    }
+}
+'@ + "`r`n" + $script:GamingSvcBlock + "`r`n" + @'
+Step 'Checking Xbox apps'
+$apps = @(
+    @{ N = 'Xbox app';               P = 'Microsoft.GamingApp';            Id = '9MV0B5HZVK9Z' },
+    @{ N = 'Xbox Identity Provider'; P = 'Microsoft.XboxIdentityProvider'; Id = '9WZDNCRD1HKW' },
+    @{ N = 'Game Bar';               P = 'Microsoft.XboxGamingOverlay';    Id = '9NZKPSTSNW4P' }
+)
+foreach ($a in $apps) {
+    if (Get-AppxPackage -Name $a.P -ErrorAction SilentlyContinue) {
+        Write-Host "   $($a.N) - installed" -ForegroundColor Green
+        continue
+    }
+    Write-Host "   $($a.N) - missing, installing..."
+    $ok = $false
+    $p = Get-AppxPackage -AllUsers -Name $a.P -ErrorAction SilentlyContinue | Select-Object -First 1
+    if ($p -and $p.InstallLocation) {
+        try { Add-AppxPackage -DisableDevelopmentMode -Register (Join-Path $p.InstallLocation 'AppxManifest.xml') -ErrorAction Stop; $ok = $true } catch { }
+    }
+    if (-not $ok) {
+        winget install --id $a.Id --source msstore -e --accept-package-agreements --accept-source-agreements
+        if ($LASTEXITCODE -eq 0) { $ok = $true }
+    }
+    if (-not $ok) {
+        Start-Process "ms-windows-store://pdp/?productid=$($a.Id)"
+        Write-Host '     Opened its Store page - click Get there.' -ForegroundColor Cyan
+    }
+}
+
+Write-Host ''
+Write-Host 'Done. Restart your PC, then open the Xbox app.' -ForegroundColor Green
+'@
 
 # ---------------------------------------------------------------------------
 # 11b. Install tab - winget apps, grouped by category
@@ -1072,23 +1347,36 @@ $ctrl.RemoveApps.Add_Click({
     if ($r -ne 'Yes') { return }
 
     $ctrl.RemoveApps.IsEnabled = $false
+    $log = New-Object System.Collections.ArrayList
+    foreach ($r in (Get-RemovedApps)) { [void]$log.Add($r) }
+
     foreach ($cb in $sel) {
-        $full = $cb.Tag
+        $full  = $cb.Tag
         $label = $cb.Content
+        $name  = $full -replace '_.*$',''
         try {
-            Get-AppxPackage -Name ($full -replace '_.*$','') -ErrorAction SilentlyContinue |
+            Get-AppxPackage -Name $name -ErrorAction SilentlyContinue |
                 Remove-AppxPackage -ErrorAction SilentlyContinue
             # deprovision from the image so it won't reinstall for new users
             $prov = Get-AppxProvisionedPackage -Online -ErrorAction SilentlyContinue |
-                    Where-Object { $_.DisplayName -eq ($full -replace '_.*$','') }
+                    Where-Object { $_.DisplayName -eq $name }
             if ($prov) { Remove-AppxProvisionedPackage -Online -PackageName $prov.PackageName -ErrorAction SilentlyContinue | Out-Null }
-            Write-Log "Removed: $label"
+
+            if (Get-AppxPackage -Name $name -ErrorAction SilentlyContinue) {
+                Write-Log "  ! ${label} could not be removed (Windows may protect it)."
+            } else {
+                Write-Log "Removed: $label  (reinstall anytime from the Restore Apps tab)"
+                $already = $log | Where-Object { $_.Name -eq $name }
+                if (-not $already) { [void]$log.Add([pscustomobject]@{ Name = $name; Label = $label }) }
+            }
         } catch {
             Write-Log "  ! Could not remove ${label}: $($_.Exception.Message)"
         }
     }
+    try { Save-RemovedApps $log } catch { Write-Log "  ! Could not save the removed-apps list: $($_.Exception.Message)" }
     $ctrl.RemoveApps.IsEnabled = $true
     Load-Bloat
+    Load-Restore
 })
 
 $ctrl.InstallBtn.Add_Click({
@@ -1113,6 +1401,89 @@ $ctrl.InstallBtn.Add_Click({
     Start-Process -FilePath 'powershell.exe' `
         -ArgumentList '-NoExit','-NoProfile','-ExecutionPolicy','Bypass','-File',"`"$tmp`"" | Out-Null
     Write-Log "Launched installer window for $($sel.Count) app(s). Watch that window for progress."
+})
+
+$ctrl.ReinstallBtn.Add_Click({
+    $sel = $script:ReinstallCheckBoxes | Where-Object { $_.IsChecked }
+    if (-not $sel) { Write-Log 'No apps selected to reinstall.'; return }
+
+    # Per-app steps: 1) re-register files if still on disk, 2) winget from the Store,
+    # 3) open the app's Store page so the user can click Get.
+    $tpl = @'
+Write-Host ''
+Write-Host '>> {0}' -ForegroundColor Yellow
+$ok = $false
+$p = Get-AppxPackage -AllUsers -Name '{1}' -ErrorAction SilentlyContinue | Select-Object -First 1
+if ($p -and $p.InstallLocation) {{
+    try {{ Add-AppxPackage -DisableDevelopmentMode -Register (Join-Path $p.InstallLocation 'AppxManifest.xml') -ErrorAction Stop; $ok = $true }} catch {{ }}
+}}
+if (-not $ok -and '{2}') {{
+    winget install --id {2} --source msstore -e --accept-package-agreements --accept-source-agreements
+    if ($LASTEXITCODE -eq 0) {{ $ok = $true }}
+}}
+if ($ok) {{ Write-Host '   Reinstalled.' -ForegroundColor Green }} else {{ Write-Host '   Opening Microsoft Store - click Get there.' -ForegroundColor Cyan; Start-Process '{3}' }}
+'@
+
+    $hasXbox = [bool]($sel | Where-Object { $_.Tag.Name -match 'Xbox|GamingApp' })
+
+    $sb = New-Object System.Text.StringBuilder
+    [void]$sb.AppendLine('$ErrorActionPreference = "Continue"')
+    [void]$sb.AppendLine('Write-Host "NullTweak - reinstalling apps..." -ForegroundColor Cyan')
+    if ($hasXbox) { [void]$sb.AppendLine($script:XboxSvcBlock) }
+    foreach ($cb in $sel) {
+        $it  = $cb.Tag
+        $id  = Get-StoreId $it.Name
+        $url = if ($id) { "ms-windows-store://pdp/?productid=$id" } `
+               else { 'ms-windows-store://search/?query=' + [uri]::EscapeDataString([string]$it.Label) }
+        $safeLabel = ([string]$it.Label) -replace "'", "''"
+        [void]$sb.AppendLine(($tpl -f $safeLabel, $it.Name, $id, $url))
+    }
+    if ($hasXbox) {
+        [void]$sb.AppendLine($script:GamingSvcBlock)
+        [void]$sb.AppendLine('Write-Host "Restart your PC before opening the Xbox app." -ForegroundColor Yellow')
+    }
+    [void]$sb.AppendLine('Write-Host ""')
+    [void]$sb.AppendLine('Write-Host "Done. You can close this window." -ForegroundColor Green')
+
+    $tmp = Join-Path $env:TEMP 'NullTweak-reinstall.ps1'
+    Set-Content -Path $tmp -Value $sb.ToString() -Encoding UTF8 -Force
+    Start-Process -FilePath 'powershell.exe' `
+        -ArgumentList '-NoExit','-NoProfile','-ExecutionPolicy','Bypass','-File',"`"$tmp`"" | Out-Null
+    Write-Log "Launched reinstall window for $($sel.Count) app(s). Watch that window for progress."
+})
+
+$ctrl.ExtremeBtn.Add_Click({
+    $msg = "EXTREME mode ticks EVERY tweak across all tabs (privacy, performance, visual effects, services, Win 10/11) for maximum speed - meant for old or weak PCs.`n`n" +
+           "It will NOT auto-disable Windows Defender. Nothing changes until you click 'Apply Selected Tweaks'.`n`n" +
+           "Select everything now?"
+    $r = [Windows.MessageBox]::Show($msg, 'Extreme mode - are you sure?', 'YesNo', 'Warning')
+    if ($r -ne 'Yes') { Write-Log 'Extreme mode cancelled.'; return }
+    $n = 0
+    foreach ($cb in $script:AllCheckBoxes) {
+        if (-not $cb.Tag.Confirm) { $cb.IsChecked = $true; $n++ }
+    }
+    Write-Log "EXTREME: ticked $n tweaks across all tabs. Review them, then click 'Apply Selected Tweaks'."
+})
+
+$ctrl.FixXboxBtn.Add_Click({
+    $tmp = Join-Path $env:TEMP 'NullTweak-fix-xbox.ps1'
+    Set-Content -Path $tmp -Value $script:XboxFixScript -Encoding UTF8 -Force
+    Start-Process -FilePath 'powershell.exe' `
+        -ArgumentList '-NoExit','-NoProfile','-ExecutionPolicy','Bypass','-File',"`"$tmp`"" | Out-Null
+    Write-Log 'Launched Xbox / Gaming Services repair window. Follow it, then restart your PC.'
+})
+
+$ctrl.ReinstallShowAll.Add_Click({ $script:ReinstallShowAll = -not $script:ReinstallShowAll; Load-Restore })
+$ctrl.ReinstallAll.Add_Click({  foreach ($c in $script:ReinstallCheckBoxes) { $c.IsChecked = $true } })
+$ctrl.ReinstallNone.Add_Click({ foreach ($c in $script:ReinstallCheckBoxes) { $c.IsChecked = $false } })
+
+# Refresh the app lists whenever their tab is opened, so they're always current.
+$ctrl.Tabs.Add_SelectionChanged({
+    param($s, $e)
+    if ($e.OriginalSource -ne $ctrl.Tabs) { return }
+    $hdr = [string]$ctrl.Tabs.SelectedItem.Header
+    if ($hdr -eq 'Restore Apps') { Load-Restore }
+    elseif ($hdr -eq 'Debloat')  { Load-Bloat }
 })
 
 $ctrl.InstallAll.Add_Click({  foreach ($c in $script:InstallCheckBoxes) { $c.IsChecked = $true } })
