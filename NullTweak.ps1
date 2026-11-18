@@ -1,5 +1,5 @@
 <#
-    NullTweak - a simple, transparent Windows 10/11 optimizer & debloater
+    NullTweak - Windows 10/11 optimizer & debloater
     -------------------------------------------------------------------------
     Everything this tool does is plain PowerShell: registry edits, service
     startup changes, scheduled-task toggles, and AppX removal. Nothing is
@@ -255,6 +255,25 @@ $xaml = @'
                     <StackPanel Name="AdvancedPanel"/>
                 </ScrollViewer>
             </TabItem>
+            <TabItem Header="Hardware">
+                <ScrollViewer VerticalScrollBarVisibility="Auto" Padding="22,16">
+                    <StackPanel>
+                        <TextBlock Text="Hardware overview" Foreground="#FFE4E4E6" FontSize="15" FontWeight="SemiBold"/>
+                        <TextBlock Name="HardwareSummary" Foreground="#FF9A9AA2" FontSize="12" TextWrapping="Wrap" Margin="0,10,0,12"
+                                   Text="Hardware information has not been refreshed yet."/>
+                        <StackPanel Orientation="Horizontal">
+                            <Button Name="HardwareRefreshBtn" Style="{StaticResource Accent}" Content="Refresh Hardware Detection" Margin="0,0,8,0"/>
+                            <Button Name="SystemReportBtn" Style="{StaticResource Ghost}" Content="Export Full System Report"/>
+                        </StackPanel>
+                        <TextBlock Text="GPU notes" Foreground="#FF6FA8FF" FontSize="12" FontWeight="SemiBold" Margin="0,18,0,5"/>
+                        <TextBlock Foreground="#FF9A9AA2" FontSize="12" TextWrapping="Wrap"
+                                   Text="NullTweak detects NVIDIA, AMD and Intel adapters and reports driver versions. Vendor driver control-panel settings are not blindly overwritten: NVIDIA Control Panel, AMD Software and Intel Graphics Command Center expose different options depending on GPU and driver. Hardware-accelerated GPU scheduling remains an optional Windows-level setting in Performance."/>
+                        <TextBlock Text="Live system metrics" Foreground="#FF6FA8FF" FontSize="12" FontWeight="SemiBold" Margin="0,18,0,5"/>
+                        <TextBlock Name="LiveMetrics" Foreground="#FF9A9AA2" FontSize="12" TextWrapping="Wrap"
+                                   Text="CPU and memory usage will appear here when refreshed."/>
+                    </StackPanel>
+                </ScrollViewer>
+            </TabItem>
             <TabItem Header="Debloat">
                 <Grid>
                     <Grid.RowDefinitions>
@@ -335,9 +354,9 @@ $xaml = @'
                         <TextBlock Foreground="#FF9A9AA2" FontSize="12" TextWrapping="Wrap" Margin="0,8,0,0"
                                    Text="A transparent Windows 10/11 optimizer. Every action is a plain registry edit, service change, scheduled-task toggle, or AppX removal - no hidden behavior, no obfuscation. Tick what you want, click Apply."/>
                         <TextBlock Foreground="#FF9A9AA2" FontSize="12" TextWrapping="Wrap" Margin="0,12,0,0"
-                                   Text="Tweaks are drawn from well-known community sources (Chris Titus WinUtil, WinAero, O&amp;O ShutUp10-style privacy defaults) and are reversible. Make a restore point first - the button is at the bottom of every tab."/>
+                                   Text="Registry, service and scheduled-task changes are journaled for rollback. Custom commands and AppX removals may require their own recovery path. Create a restore point before applying changes."/>
                         <TextBlock Foreground="#FFCF8A5A" FontSize="12" TextWrapping="Wrap" Margin="0,12,0,0"
-                                   Text="Items marked (!) reduce a security or safety feature (e.g. SmartScreen, Core Isolation, Defender). They're optional and off or clearly flagged. Only enable them if you understand the trade-off."/>
+                                   Text="Items marked (!) reduce a security or safety feature (e.g. SmartScreen, Core Isolation, Defender). They are opt-in and disabled by default. Only enable them if you understand the trade-off."/>
 
                         <Border Height="1" Background="#FF2E2E34" Margin="0,20,0,16"/>
                         <TextBlock Foreground="#FFE4E4E6" FontSize="14" FontWeight="SemiBold" Text="Extreme mode"/>
@@ -345,6 +364,12 @@ $xaml = @'
                                    Text="Ticks every tweak across all tabs at once - privacy, performance, visual effects, services, Win 10/11 - for maximum speed on old or weak PCs. It won't auto-disable Windows Defender. Nothing is applied until you click 'Apply Selected Tweaks'."/>
                         <Button Name="ExtremeBtn" Style="{StaticResource Danger}"
                                 Content="EXTREME - select everything" HorizontalAlignment="Left"/>
+                        <StackPanel Orientation="Horizontal" Margin="0,14,0,0">
+                            <Button Name="HistoryBtn" Style="{StaticResource Ghost}"
+                                    Content="Open Tweak History" Margin="0,0,8,0"/>
+                            <Button Name="RollbackBtn" Style="{StaticResource Danger}"
+                                    Content="Rollback Tracked Tweaks"/>
+                        </StackPanel>
                     </StackPanel>
                 </ScrollViewer>
             </TabItem>
@@ -386,7 +411,7 @@ foreach ($n in 'Tabs','OsLabel','GeneralPanel','VersionPanel','VersionTab','Priv
                 'BloatAll','BloatNone','BloatRefresh',
                 'InstallPanel','InstallBtn','InstallAll','InstallNone',
                 'ReinstallPanel','ReinstallBtn','ReinstallAll','ReinstallNone','ReinstallShowAll','ReinstallHeader',
-                'FixXboxBtn','ExtremeBtn') {
+                'FixXboxBtn','ExtremeBtn','SystemReportBtn','HistoryBtn','RollbackBtn','HardwareSummary','HardwareRefreshBtn','LiveMetrics') {
     $ctrl[$n] = $win.FindName($n)
 }
 $ctrl.OsLabel.Text        = $osLabel
@@ -404,34 +429,89 @@ function Write-Log {
     })
 }
 
+function Get-GpuInventory {
+    try {
+        @(Get-CimInstance Win32_VideoController -ErrorAction Stop | ForEach-Object {
+            $vendor = if ($_.Name -match 'NVIDIA') { 'NVIDIA' }
+                      elseif ($_.Name -match 'AMD|Radeon') { 'AMD' }
+                      elseif ($_.Name -match 'Intel') { 'Intel' }
+                      else { 'Other' }
+            [pscustomobject]@{ Vendor=$vendor; Name=$_.Name; DriverVersion=$_.DriverVersion; PnpDeviceId=$_.PNPDeviceID }
+        })
+    } catch { @() }
+}
+
+$script:DetectedGpus = @(Get-GpuInventory)
+if ($script:DetectedGpus.Count) {
+    foreach ($gpu in $script:DetectedGpus) { Write-Log ("GPU detected: {0} - {1} (driver {2})" -f $gpu.Vendor,$gpu.Name,$gpu.DriverVersion) }
+} else { Write-Log 'GPU detection unavailable; vendor-specific tweaks will not be assumed.' }
+
+function Get-SystemInventory {
+    $cpu = Get-CimInstance Win32_Processor -ErrorAction SilentlyContinue | Select-Object -First 1
+    $cs  = Get-CimInstance Win32_ComputerSystem -ErrorAction SilentlyContinue
+    $bios = Get-CimInstance Win32_BIOS -ErrorAction SilentlyContinue
+    $board = Get-CimInstance Win32_BaseBoard -ErrorAction SilentlyContinue | Select-Object -First 1
+    $memory = @(Get-CimInstance Win32_PhysicalMemory -ErrorAction SilentlyContinue | ForEach-Object {
+        [pscustomobject]@{ CapacityGB=[math]::Round($_.Capacity/1GB,1); SpeedMHz=$_.Speed; Manufacturer=$_.Manufacturer; PartNumber=$_.PartNumber }
+    })
+    $disks = @(Get-PhysicalDisk -ErrorAction SilentlyContinue | ForEach-Object {
+        [pscustomobject]@{ FriendlyName=$_.FriendlyName; MediaType=[string]$_.MediaType; BusType=[string]$_.BusType; SizeGB=[math]::Round($_.Size/1GB,1); Health=[string]$_.HealthStatus }
+    })
+    [pscustomobject]@{
+        Computer=$env:COMPUTERNAME; OS=$osLabel
+        Manufacturer=$cs.Manufacturer; Model=$cs.Model
+        CPU=$cpu.Name; Cores=$cpu.NumberOfCores; LogicalProcessors=$cpu.NumberOfLogicalProcessors
+        RAM_GB=if ($cs.TotalPhysicalMemory) {[math]::Round($cs.TotalPhysicalMemory/1GB,1)} else {$null}
+        MemoryModules=$memory
+        Motherboard=if ($board) { "$($board.Manufacturer) $($board.Product)" } else {$null}
+        BIOS=if ($bios) { [string]$bios.SMBIOSBIOSVersion } else {$null}
+        GPUs=@($script:DetectedGpus); Disks=$disks;
+        GPUVendorSoftware=[ordered]@{ NVIDIAApp=(Test-Path (Join-Path $env:ProgramFiles 'NVIDIA Corporation\NVIDIA app\CEF\NVIDIA App.exe')); AMDSoftware=(Test-Path (Join-Path $env:ProgramFiles 'AMD\CNext\CNext\RadeonSoftware.exe')); IntelGraphicsCommandCenter=([bool](Get-AppxPackage -Name '*IntelGraphicsCommandCenter*' -ErrorAction SilentlyContinue)) }
+    }
+}
+
 # ---------------------------------------------------------------------------
 # 6. Low-level action runners
 # ---------------------------------------------------------------------------
 function Set-Reg {
     param($Path, $Name, $Type, $Value)
-    if (-not (Test-Path $Path)) { New-Item -Path $Path -Force | Out-Null }
-    New-ItemProperty -Path $Path -Name $Name -PropertyType $Type -Value $Value -Force | Out-Null
+    if (-not (Test-Path -LiteralPath $Path)) {
+        New-Item -Path $Path -Force -ErrorAction Stop | Out-Null
+    }
+    $regName = if ([string]$Name -match '^\(default\)$') { '' } else { [string]$Name }
+    $kind = [System.Enum]::Parse([Microsoft.Win32.RegistryValueKind], [string]$Type)
+    $key = Get-Item -LiteralPath $Path -ErrorAction Stop
+    $key.SetValue($regName, $Value, $kind)
+    $actual = (Get-Item -LiteralPath $Path -ErrorAction Stop).GetValue($regName)
+    if ($Type -eq 'DWord') {
+        if ([uint32]$actual -ne [uint32]$Value) { throw "Registry verification failed: $Path\$Name" }
+    } elseif ([string]$actual -cne [string]$Value) {
+        throw "Registry verification failed: $Path\$Name"
+    }
 }
 
 function Set-ServiceStartup {
     param($Name, [ValidateSet('Disabled','Manual','Automatic')]$Start)
+    $xboxServices = @('XblAuthManager','XblGameSave','XboxGipSvc','XboxNetApiSvc')
+    if ($Name -in $xboxServices -and $Start -eq 'Disabled') {
+        throw "Safety block: NullTweak will not disable Xbox service '$Name'."
+    }
     $map = @{ Disabled = 4; Manual = 3; Automatic = 2 }
-    # Registry-level change is the most reliable (works on protected services).
     $svcPath = "HKLM:\SYSTEM\CurrentControlSet\Services\$Name"
-    if (Test-Path $svcPath) {
-        Set-ItemProperty -Path $svcPath -Name 'Start' -Value $map[$Start] -Type DWord -Force -ErrorAction SilentlyContinue
-    }
-    # Best-effort stop + Set-Service for the live state.
-    try { Set-Service -Name $Name -StartupType $Start -ErrorAction SilentlyContinue } catch {}
-    if ($Start -eq 'Disabled') {
-        try { Stop-Service -Name $Name -Force -ErrorAction SilentlyContinue } catch {}
-    }
+    if (-not (Test-Path -LiteralPath $svcPath)) { throw "Service registry key not found: $Name" }
+    New-ItemProperty -LiteralPath $svcPath -Name 'Start' -PropertyType DWord -Value $map[$Start] -Force -ErrorAction Stop | Out-Null
+    Set-Service -Name $Name -StartupType $Start -ErrorAction Stop
+    if ($Start -eq 'Disabled') { Stop-Service -Name $Name -Force -ErrorAction Stop }
+    $svc = Get-CimInstance Win32_Service -Filter "Name='$Name'" -ErrorAction Stop
+    $expected = switch ($Start) { 'Disabled' { 'Disabled' } 'Manual' { 'Manual' } 'Automatic' { 'Auto' } }
+    if ($svc.StartMode -ne $expected) { throw "Service verification failed for '$Name' (reported $($svc.StartMode))." }
 }
 
 function Disable-Task {
     param($TaskPath, $TaskName)
-    try { Disable-ScheduledTask -TaskPath $TaskPath -TaskName $TaskName -ErrorAction Stop | Out-Null }
-    catch { }
+    Disable-ScheduledTask -TaskPath $TaskPath -TaskName $TaskName -ErrorAction Stop | Out-Null
+    $task = Get-ScheduledTask -TaskPath $TaskPath -TaskName $TaskName -ErrorAction Stop
+    if ($task.State -eq 'Ready' -and $task.Settings.Enabled) { throw "Scheduled task verification failed: $TaskPath$TaskName" }
 }
 
 function Invoke-TweakAction {
@@ -451,6 +531,84 @@ function RegD { param($p,$n,$v) @{ Type='Reg'; Path=$p; Name=$n; PropType='DWord
 function RegS { param($p,$n,$v) @{ Type='Reg'; Path=$p; Name=$n; PropType='String'; Value=$v } }  # String
 function Svc  { param($n,$s='Disabled') @{ Type='Service'; Name=$n; Start=$s } }
 function Task { param($p,$n) @{ Type='SchTask'; Path=$p; Name=$n } }
+
+# Persistent change journal. Registry, service and scheduled-task actions are
+# snapshotted before mutation and can be restored in reverse order.
+$script:NullTweakData = Join-Path $env:ProgramData 'NullTweak'
+$script:HistoryPath = Join-Path $script:NullTweakData 'tweak-history.json'
+if (-not (Test-Path -LiteralPath $script:NullTweakData)) {
+    New-Item -ItemType Directory -Path $script:NullTweakData -Force | Out-Null
+}
+function Get-TweakHistory {
+    if (-not (Test-Path -LiteralPath $script:HistoryPath)) { return @() }
+    try { $h = Get-Content -LiteralPath $script:HistoryPath -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop; return @($h) }
+    catch { Write-Log "History file could not be read: $($_.Exception.Message)"; return @() }
+}
+function Save-TweakHistory($history) {
+    $tmp = "$($script:HistoryPath).tmp"
+    ConvertTo-Json -InputObject @($history) -Depth 12 | Set-Content -LiteralPath $tmp -Encoding UTF8 -Force
+    Move-Item -LiteralPath $tmp -Destination $script:HistoryPath -Force
+}
+function Get-ActionSnapshot($a) {
+    switch ($a.Type) {
+        'Reg' {
+            $exists = Test-Path -LiteralPath $a.Path
+            $hasValue = $false; $value = $null; $kind = $null
+            if ($exists) {
+                try {
+                    $key = Get-Item -LiteralPath $a.Path -ErrorAction Stop
+                    $regName = if ([string]$a.Name -match '^\(default\)$') { '' } else { [string]$a.Name }
+                    $hasValue = $key.GetValueNames() -contains $regName
+                    if ($hasValue) { $value = $key.GetValue($regName); $kind = [string]$key.GetValueKind($regName) }
+                } catch { }
+            }
+            return [ordered]@{ Type='Reg'; Path=$a.Path; Name=$a.Name; KeyExisted=$exists; ValueExisted=$hasValue; Value=$value; Kind=$kind }
+        }
+        'Service' {
+            $svc = Get-CimInstance Win32_Service -Filter "Name='$($a.Name)'" -ErrorAction Stop
+            return [ordered]@{ Type='Service'; Name=$a.Name; StartMode=$svc.StartMode; State=$svc.State }
+        }
+        'SchTask' {
+            $task = Get-ScheduledTask -TaskPath $a.Path -TaskName $a.Name -ErrorAction Stop
+            return [ordered]@{ Type='SchTask'; Path=$a.Path; Name=$a.Name; Enabled=[bool]$task.Settings.Enabled }
+        }
+        default { return [ordered]@{ Type='Unsupported'; ActionType=[string]$a.Type; Note='This action uses a custom command and is not automatically reversible.' } }
+    }
+}
+function Restore-ActionSnapshot($snap) {
+    switch ($snap.Type) {
+        'Reg' {
+            if ($snap.ValueExisted) {
+                if (-not (Test-Path -LiteralPath $snap.Path)) { New-Item -Path $snap.Path -Force -ErrorAction Stop | Out-Null }
+                $regName = if ([string]$snap.Name -match '^\(default\)$') { '' } else { [string]$snap.Name }
+                $key = Get-Item -LiteralPath $snap.Path -ErrorAction Stop
+                $kind = [System.Enum]::Parse([Microsoft.Win32.RegistryValueKind], [string]$snap.Kind)
+                $key.SetValue($regName, $snap.Value, $kind)
+            } elseif (Test-Path -LiteralPath $snap.Path) {
+                $regName = if ([string]$snap.Name -match '^\(default\)$') { '' } else { [string]$snap.Name }
+                if ($regName -eq '') { (Get-Item -LiteralPath $snap.Path).DeleteValue('', $false) }
+                else { Remove-ItemProperty -LiteralPath $snap.Path -Name $regName -ErrorAction SilentlyContinue }
+                if (-not $snap.KeyExisted) {
+                    $remainingKey = Get-Item -LiteralPath $snap.Path -ErrorAction SilentlyContinue
+                    if ($remainingKey -and $remainingKey.GetValueNames().Count -eq 0 -and $remainingKey.GetSubKeyNames().Count -eq 0) { Remove-Item -LiteralPath $snap.Path -Force -ErrorAction SilentlyContinue }
+                }
+            }
+        }
+        'Service' {
+            $start = switch ($snap.StartMode) { 'Auto' {'Automatic'} 'Manual' {'Manual'} 'Disabled' {'Disabled'} default {$null} }
+            if ($start) {
+                Set-Service -Name $snap.Name -StartupType $start -ErrorAction Stop
+                if ($snap.State -eq 'Running') { Start-Service -Name $snap.Name -ErrorAction Stop }
+                elseif ($snap.State -eq 'Stopped') { Stop-Service -Name $snap.Name -Force -ErrorAction SilentlyContinue }
+            }
+        }
+        'SchTask' {
+            if ($snap.Enabled) { Enable-ScheduledTask -TaskPath $snap.Path -TaskName $snap.Name -ErrorAction Stop | Out-Null }
+            else { Disable-ScheduledTask -TaskPath $snap.Path -TaskName $snap.Name -ErrorAction Stop | Out-Null }
+        }
+        default { throw "No automatic rollback handler for action type '$($snap.Type)'" }
+    }
+}
 
 # Common roots
 $HKCU = 'HKCU:\Software'
@@ -602,7 +760,7 @@ $privacyTweaks = @(
     @{ Name='Disable Visual Studio telemetry'; Default=$true; Desc='Opt out of VS SQM.'
        Actions=@( (RegD "$HKLM\Policies\Microsoft\VisualStudio\SQM" 'OptIn' 0) ) }
 
-    @{ Name='Disable SmartScreen  (!)'; Default=$true; Warn=$true
+    @{ Name='Disable SmartScreen  (!)'; Default=$false; Warn=$true
        Desc='(!) Turns off SmartScreen app/file reputation checks. Reduces protection against malicious downloads.'
        Actions=@(
            (RegD "$HKLM\Policies\Microsoft\Windows\System" 'EnableSmartScreen' 0),
@@ -611,10 +769,10 @@ $privacyTweaks = @(
 
 # ---- PERFORMANCE ----
 $perfTweaks = @(
-    @{ Name='NullTweak Competitive power plan'; Default=$true
-       Desc='Custom plan based on Ultimate Performance: CPU always 100%, no core parking, aggressive boost, USB/PCIe power saving off, no disk/sleep timeouts. Best for competitive games. Uses more power - on a laptop, applies only when plugged in.'
+    @{ Name='NullTweak High Performance power plan'; Default=$false
+       Desc='Creates a separate high-performance plan. Keeps CPU minimum at 5% (not permanently pinned at 100%), enables boost and reduces core parking on AC power. USB/PCIe power saving is disabled on AC; your existing plan remains available to switch back.'
        Actions=@( @{ Type='Cmd'; Script={
-            $planName = 'NullTweak Competitive'
+            $planName = 'NullTweak High Performance'
             $list = powercfg /list | Out-String
             $g = $null
             if ($list -match "([0-9a-fA-F\-]{36})\s+\($planName\)") { $g = $matches[1] }
@@ -629,22 +787,19 @@ $perfTweaks = @(
             }
             if (-not $g) { Write-Log '  ! Could not create power plan.'; return }
 
-            # CPU: min/max 100%, aggressive boost, no core parking
-            powercfg -setacvalueindex $g SUB_PROCESSOR PROCTHROTTLEMIN 100 | Out-Null
+            # CPU: retain idle headroom, allow full boost, reduce core parking on AC
+            powercfg -setacvalueindex $g SUB_PROCESSOR PROCTHROTTLEMIN 5   | Out-Null
             powercfg -setacvalueindex $g SUB_PROCESSOR PROCTHROTTLEMAX 100 | Out-Null
-            powercfg -setacvalueindex $g SUB_PROCESSOR PERFBOOSTMODE 2      | Out-Null
-            powercfg -setacvalueindex $g SUB_PROCESSOR CPMINCORES 100       | Out-Null
+            powercfg -setacvalueindex $g SUB_PROCESSOR PERFBOOSTMODE 2     | Out-Null
+            powercfg -setacvalueindex $g SUB_PROCESSOR CPMINCORES 100      | Out-Null
             # USB selective suspend off
             powercfg -setacvalueindex $g 2a737441-1930-4402-8d77-b2bebba308a3 48e6b7a6-50f5-4782-a5d4-53bb8f07e226 0 | Out-Null
             # PCIe link state power management off
             powercfg -setacvalueindex $g SUB_PCIEXPRESS ASPM 0 | Out-Null
-            # Never turn off disk, never sleep/hibernate
-            powercfg -setacvalueindex $g SUB_DISK DISKIDLE 0       | Out-Null
-            powercfg -setacvalueindex $g SUB_SLEEP STANDBYIDLE 0   | Out-Null
-            powercfg -setacvalueindex $g SUB_SLEEP HIBERNATEIDLE 0 | Out-Null
-
+            # Preserve Windows' existing disk and sleep timeouts.
             powercfg -setactive $g | Out-Null
-            Write-Log "  Power plan '$planName' active."
+            if ($LASTEXITCODE -ne 0) { throw 'Could not activate the new power plan.' }
+            Write-Log "  Power plan '$planName' active. Switch back to your previous plan in Power Options whenever needed."
        } } ) }
 
     @{ Name='Enable Game Mode'; Default=$true; Desc='Prioritize the active game.'
@@ -658,10 +813,7 @@ $perfTweaks = @(
            (RegD 'HKCU:\System\GameConfigStore' 'GameDVR_Enabled' 0),
            (RegD "$HKLM\Policies\Microsoft\Windows\GameDVR" 'AllowGameDVR' 0) ) }
 
-    @{ Name='Disable Xbox Live services'; Default=$true; Desc='Disable Xbox auth/save/networking services. Turn this off if you use the Xbox app or Game Pass (Debloat > Fix Xbox undoes it).'
-       Actions=@( (Svc 'XblAuthManager'), (Svc 'XblGameSave'), (Svc 'XboxGipSvc'), (Svc 'XboxNetApiSvc') ) }
-
-    @{ Name='Win32PrioritySeparation = 40 (foreground responsiveness)'; Default=$true
+    @{ Name='Win32PrioritySeparation = 40 (foreground responsiveness)'; Default=$false
        Desc='Short/fixed quantum, no boost - snappier input for gaming (decimal 40 / 0x28). Try 38 or 26 if you prefer smoothness.'
        Actions=@( (RegD 'HKLM:\SYSTEM\CurrentControlSet\Control\PriorityControl' 'Win32PrioritySeparation' 40) ) }
 
@@ -681,23 +833,23 @@ $perfTweaks = @(
             if (-not (Test-Path $wm)) { New-Item -Path $wm -Force | Out-Null }
             Set-ItemProperty -Path $wm -Name 'MinAnimate' -Value '0' -Force
             $adv = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced'
-            Set-ItemProperty -Path $adv -Name 'TaskbarAnimations'   -Value 0 -Type DWord -Force
-            Set-ItemProperty -Path $adv -Name 'ListviewAlphaSelect' -Value 0 -Type DWord -Force
-            Set-ItemProperty -Path $adv -Name 'ListviewShadow'      -Value 0 -Type DWord -Force
-            Set-ItemProperty -Path $adv -Name 'IconsOnly'           -Value 1 -Type DWord -Force
+            New-ItemProperty -Path $adv -Name 'TaskbarAnimations' -PropertyType DWord -Value 0 -Force | Out-Null
+            New-ItemProperty -Path $adv -Name 'ListviewAlphaSelect' -PropertyType DWord -Value 0 -Force | Out-Null
+            New-ItemProperty -Path $adv -Name 'ListviewShadow' -PropertyType DWord -Value 0 -Force | Out-Null
+            New-ItemProperty -Path $adv -Name 'IconsOnly' -PropertyType DWord -Value 1 -Force | Out-Null
             $dwm = 'HKCU:\Software\Microsoft\Windows\DWM'
             if (-not (Test-Path $dwm)) { New-Item -Path $dwm -Force | Out-Null }
-            Set-ItemProperty -Path $dwm -Name 'EnableAeroPeek' -Value 0 -Type DWord -Force
+            New-ItemProperty -Path $dwm -Name 'EnableAeroPeek' -PropertyType DWord -Value 0 -Force | Out-Null
             $vfx = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\VisualEffects'
             if (-not (Test-Path $vfx)) { New-Item -Path $vfx -Force | Out-Null }
-            Set-ItemProperty -Path $vfx -Name 'VisualFXSetting' -Value 3 -Type DWord -Force
+            New-ItemProperty -Path $vfx -Name 'VisualFXSetting' -PropertyType DWord -Value 3 -Force | Out-Null
        } } ) }
 
     @{ Name='Disable power throttling'; Default=$true
        Desc='Stops Windows from slowing down background/game processes to save power.'
        Actions=@( (RegD 'HKLM:\SYSTEM\CurrentControlSet\Control\Power\PowerThrottling' 'PowerThrottlingOff' 1) ) }
 
-    @{ Name='Disable fullscreen optimizations'; Default=$true
+    @{ Name='Disable fullscreen optimizations'; Default=$false
        Desc='Gives games true exclusive fullscreen - can lower input lag in competitive titles.'
        Actions=@(
            (RegD 'HKCU:\System\GameConfigStore' 'GameDVR_FSEBehaviorMode' 2),
@@ -705,7 +857,7 @@ $perfTweaks = @(
            (RegD 'HKCU:\System\GameConfigStore' 'GameDVR_FSEBehavior' 2),
            (RegD 'HKCU:\System\GameConfigStore' 'GameDVR_DXGIHonorFSEWindowsCompatible' 1) ) }
 
-    @{ Name='Prioritize games (CPU/GPU scheduling)'; Default=$true
+    @{ Name='Prioritize games (CPU/GPU scheduling)'; Default=$false
        Desc='Raises the Games multimedia profile to high CPU/GPU priority and reserves less CPU for background tasks.'
        Actions=@(
            (RegD 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile' 'SystemResponsiveness' 0),
@@ -729,19 +881,22 @@ $perfTweaks = @(
     @{ Name='Lower network latency (disable Nagle)'; Default=$false
        Desc='Sends small packets immediately on all network adapters. Can reduce ping jitter in online games.'
        Actions=@( @{ Type='Cmd'; Script={
-            Get-ChildItem 'HKLM:\SYSTEM\CurrentControlSet\Services\Tcpip\Parameters\Interfaces' -ErrorAction SilentlyContinue |
-                ForEach-Object {
-                    New-ItemProperty -Path $_.PSPath -Name 'TcpAckFrequency' -PropertyType DWord -Value 1 -Force | Out-Null
-                    New-ItemProperty -Path $_.PSPath -Name 'TCPNoDelay'      -PropertyType DWord -Value 1 -Force | Out-Null
-                }
+            $activeIds = @(Get-NetIPConfiguration -ErrorAction Stop | Where-Object { $_.IPv4Address -or $_.IPv6Address } | ForEach-Object { $_.NetAdapter.InterfaceGuid.ToString('B') })
+            if (-not $activeIds) { throw 'No active IP interfaces found; Nagle settings were not changed.' }
+            foreach ($id in $activeIds) {
+                $key = Join-Path 'HKLM:\SYSTEM\CurrentControlSet\Services\Tcpip\Parameters\Interfaces' $id
+                if (-not (Test-Path -LiteralPath $key)) { continue }
+                New-ItemProperty -LiteralPath $key -Name 'TcpAckFrequency' -PropertyType DWord -Value 1 -Force -ErrorAction Stop | Out-Null
+                New-ItemProperty -LiteralPath $key -Name 'TCPNoDelay' -PropertyType DWord -Value 1 -Force -ErrorAction Stop | Out-Null
+            }
        } } ) }
 
     @{ Name='Prefer IPv4 over IPv6'; Default=$false
        Desc='Tells Windows to use IPv4 first (DisabledComponents = 0x20). Can help on IPv4-only game servers. Leave off if your network needs IPv6. Reboot required.'
        Actions=@( (RegD 'HKLM:\SYSTEM\CurrentControlSet\Services\Tcpip6\Parameters' 'DisabledComponents' 0x20) ) }
 
-    @{ Name='Force maximum timer resolution'; Default=$true
-       Desc='Keeps the system timer at its highest resolution for every process - steadier frame pacing on Windows 11 24H2+. Harmless on older builds.'
+    @{ Name='Global timer-resolution registry request (legacy)'; Default=$false
+       Desc='Legacy registry request only; it does not force every process to use maximum timer resolution and may have no effect on modern Windows. Kept opt-in for compatibility testing.'
        Actions=@( (RegD 'HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager\kernel' 'GlobalTimerResolutionRequests' 1) ) }
 
     @{ Name='Optimize windowed/borderless games (flip model)'; Default=$true
@@ -799,12 +954,113 @@ $perfTweaks = @(
     @{ Name='Disable Print Spooler  (!)'; Default=$false; Warn=$true
        Desc='(!) Disables printing entirely. Only if you never print.'
        Actions=@( (Svc 'Spooler') ) }
+
+    @{ Name='Enable processor performance boost'; Default=$false
+       Desc='Sets the active power plan processor boost mode to Aggressive on AC and Efficient Aggressive on battery where supported. Power-plan change; not a universal FPS tweak.'
+       Actions=@( @{ Type='Cmd'; Script={
+            $active = (powercfg /getactivescheme | Select-String -Pattern '([0-9a-fA-F-]{36})').Matches.Groups[1].Value
+            if (-not $active) { throw 'Could not identify the active power plan.' }
+            $sub = '54533251-82be-4824-96c1-47b60b740d00'
+            $boost = 'be337238-0d82-4146-a960-4f3749d470c7'
+            powercfg /setacvalueindex $active $sub $boost 2 | Out-Null
+            if ($LASTEXITCODE -ne 0) { throw 'Could not set AC processor boost mode.' }
+            powercfg /setdcvalueindex $active $sub $boost 4 | Out-Null
+            if ($LASTEXITCODE -ne 0) { throw 'Could not set DC processor boost mode.' }
+            powercfg /setactive $active | Out-Null
+            Write-Log '  Processor boost policy updated on the active plan.'
+       } } ) }
+
+    @{ Name='Reduce CPU core parking on AC'; Default=$false
+       Desc='Requests all logical cores available on AC power on supported processors. May increase idle power and temperatures; Windows/firmware can still manage hardware limits.'
+       Actions=@( @{ Type='Cmd'; Script={
+            $active = (powercfg /getactivescheme | Select-String -Pattern '([0-9a-fA-F-]{36})').Matches.Groups[1].Value
+            if (-not $active) { throw 'Could not identify the active power plan.' }
+            $sub = '54533251-82be-4824-96c1-47b60b740d00'
+            $min = '0cc5b647-c1df-4637-891a-dec35c318583'
+            powercfg /setacvalueindex $active $sub $min 100 | Out-Null
+            if ($LASTEXITCODE -ne 0) { throw 'Core-parking setting is unavailable on this processor.' }
+            powercfg /setactive $active | Out-Null
+            Write-Log '  Minimum unparked cores set to 100% on AC.'
+       } } ) }
+
+    @{ Name='Disable TCP/IP NetBIOS over TCP/IP'; Default=$false
+       Desc='Disables legacy NetBIOS name resolution on active adapters. Only use on networks that do not require legacy NetBIOS discovery; this is not a ping tweak.'
+       Actions=@( @{ Type='Cmd'; Script={
+            $configs = @(Get-CimInstance Win32_NetworkAdapterConfiguration -Filter 'IPEnabled=True' -ErrorAction Stop)
+            if (-not $configs) { throw 'No active IP network configurations found.' }
+            foreach ($cfg in $configs) {
+                $result = Invoke-CimMethod -InputObject $cfg -MethodName SetTcpipNetbios -Arguments @{ TcpipNetbiosOptions=[uint32]2 } -ErrorAction Stop
+                if ($result.ReturnValue -notin 0,1) { throw "NetBIOS configuration failed on $($cfg.Description): $($result.ReturnValue)" }
+            }
+            Write-Log '  Legacy NetBIOS over TCP/IP disabled on IP-enabled adapters.'
+       } } ) }
+
+    @{ Name='Enable Windows memory compression'; Default=$false
+       Desc='Enables the built-in memory compression feature if Windows reports it disabled. This is not a RAM cleaner; it can reduce paging pressure on memory-constrained systems.'
+       Actions=@( @{ Type='Cmd'; Script={
+            $state = Get-MMAgent -ErrorAction Stop
+            if (-not $state.MemoryCompression) { Enable-MMAgent -MemoryCompression -ErrorAction Stop }
+            $verify = Get-MMAgent -ErrorAction Stop
+            if (-not $verify.MemoryCompression) { throw 'Memory compression did not enable successfully.' }
+            Write-Log '  Windows memory compression is enabled.'
+       } } ) }
+
+    @{ Name='Use system-managed pagefile'; Default=$false
+       Desc='Lets Windows size the pagefile automatically. Useful for general stability and crash dumps; not a guaranteed performance boost. Reboot may be required.'
+       Actions=@( @{ Type='Cmd'; Script={
+            $cs = Get-CimInstance Win32_ComputerSystem -ErrorAction Stop
+            Set-CimInstance -InputObject $cs -Property @{ AutomaticManagedPagefile=$true } -ErrorAction Stop | Out-Null
+            $verify = Get-CimInstance Win32_ComputerSystem -ErrorAction Stop
+            if (-not $verify.AutomaticManagedPagefile) { throw 'System-managed pagefile verification failed.' }
+            Write-Log '  Windows is configured to manage the pagefile automatically.'
+       } } ) }
+
+    @{ Name='Enable Receive Side Scaling (RSS)'; Default=$false
+       Desc='Enables RSS on physical network adapters that support it, distributing receive processing across CPU cores. Unsupported adapters are skipped.'
+       Actions=@( @{ Type='Cmd'; Script={
+            $adapters = @(Get-NetAdapter -Physical -ErrorAction Stop | Where-Object Status -eq 'Up')
+            if (-not $adapters) { throw 'No active physical network adapters were found.' }
+            foreach ($adapter in $adapters) {
+                $rss = Get-NetAdapterRss -Name $adapter.Name -ErrorAction SilentlyContinue
+                if ($null -eq $rss) { Write-Log "  RSS unsupported: $($adapter.Name)"; continue }
+                Set-NetAdapterRss -Name $adapter.Name -Enabled $true -NoRestart -ErrorAction Stop
+                $check = Get-NetAdapterRss -Name $adapter.Name -ErrorAction Stop
+                if (-not $check.Enabled) { throw "RSS verification failed on $($adapter.Name)." }
+                Write-Log "  RSS enabled: $($adapter.Name)"
+            }
+       } } ) }
+
+    @{ Name='Disable network adapter power-down'; Default=$false
+       Desc='Prevents Windows from powering down supported active network adapters. May increase laptop battery use.'
+       Actions=@( @{ Type='Cmd'; Script={
+            $adapters = @(Get-NetAdapter -Physical -ErrorAction Stop | Where-Object Status -eq 'Up')
+            if (-not $adapters) { throw 'No active physical network adapters were found.' }
+            foreach ($adapter in $adapters) {
+                $pm = Get-NetAdapterPowerManagement -Name $adapter.Name -ErrorAction SilentlyContinue
+                if ($null -eq $pm -or $pm.AllowComputerToTurnOffDevice -eq 'Unsupported') { Write-Log "  Adapter power management unsupported: $($adapter.Name)"; continue }
+                Set-NetAdapterPowerManagement -Name $adapter.Name -AllowComputerToTurnOffDevice Disabled -NoRestart -ErrorAction Stop
+                $check = Get-NetAdapterPowerManagement -Name $adapter.Name -ErrorAction Stop
+                if ($check.AllowComputerToTurnOffDevice -ne 'Disabled') { throw "Power management verification failed on $($adapter.Name)." }
+                Write-Log "  Adapter power-down disabled: $($adapter.Name)"
+            }
+       } } ) }
+
+    @{ Name='Ensure SSD TRIM is enabled'; Default=$false
+       Desc='Enables Windows delete-notify/TRIM for NTFS volumes. Useful for SSD maintenance; harmless to leave enabled on supported storage.'
+       Actions=@( @{ Type='Cmd'; Script={
+            $out = fsutil behavior set DisableDeleteNotify 0 2>&1 | Out-String
+            if ($LASTEXITCODE -ne 0) { throw "Could not enable TRIM: $out" }
+            $verify = fsutil behavior query DisableDeleteNotify 2>&1 | Out-String
+            if ($verify -notmatch 'DisableDeleteNotify = 0') { throw "TRIM verification failed: $verify" }
+            Write-Log '  Windows delete-notify/TRIM is enabled.'
+       } } ) }
 )
+
 
 # ---- ADVANCED (security trade-offs / power-user) ----
 $advancedTweaks = @(
-    @{ Name='Disable Core Isolation / Memory Integrity  (!)'; Default=$true; Warn=$true
-       Desc='(!) Disables HVCI. Microsoft suggests this for gaming performance, but it lowers kernel protection. Reboot required.'
+    @{ Name='Disable Core Isolation / Memory Integrity  (!)'; Default=$false; Warn=$true
+       Desc='(!) Disables HVCI. This lowers kernel protection; performance impact varies and is often negligible. Reboot required.'
        Actions=@( (RegD 'HKLM:\SYSTEM\CurrentControlSet\Control\DeviceGuard\Scenarios\HypervisorEnforcedCodeIntegrity' 'Enabled' 0) ) }
 
     @{ Name='Disable Virtualization Based Security  (!)'; Default=$false; Warn=$true
@@ -852,7 +1108,7 @@ $win11Tweaks = @(
        Actions=@(
            (RegD "$HKLM\Policies\Microsoft\Dsh" 'AllowNewsAndInterests' 0),
            @{ Type='Cmd'; Script={
-                try { Set-ItemProperty -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced' -Name 'TaskbarDa' -Value 0 -Type DWord -ErrorAction Stop } catch {}
+                try { New-ItemProperty -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced' -Name 'TaskbarDa' -PropertyType DWord -Value 0 -Force -ErrorAction Stop | Out-Null } catch {}
            } } ) }
 
     @{ Name='Hide Chat / Teams button'; Default=$true; Desc='Remove the consumer Teams Chat icon.'
@@ -1165,8 +1421,11 @@ Step 'Restoring Xbox services to Windows defaults (Manual)'
 foreach ($s in 'XblAuthManager','XblGameSave','XboxGipSvc','XboxNetApiSvc') {
     $k = "HKLM:\SYSTEM\CurrentControlSet\Services\$s"
     if (Test-Path $k) {
-        Set-ItemProperty -Path $k -Name 'Start' -Value 3 -Type DWord -Force
-        Write-Host "   $s -> Manual"
+        try {
+            New-ItemProperty -LiteralPath $k -Name 'Start' -PropertyType DWord -Value 3 -Force -ErrorAction Stop | Out-Null
+            Set-Service -Name $s -StartupType Manual -ErrorAction Stop
+            Write-Host "   $s -> Manual" -ForegroundColor Green
+        } catch { Write-Host "   Could not restore $s : $($_.Exception.Message)" -ForegroundColor Red }
     }
 }
 '@
@@ -1278,6 +1537,8 @@ $installApps = [ordered]@{
         @{ N='Roblox Studio';        Id='Roblox.RobloxStudio' },
         @{ N='Steam';                Id='Valve.Steam' },
         @{ N='Discord';              Id='Discord.Discord' },
+        @{ N='OBS Studio';           Id='OBSProject.OBSStudio' },
+        @{ N='ShareX';               Id='ShareX.ShareX' },
         @{ N='Epic Games Launcher';  Id='EpicGames.EpicGamesLauncher' }
     )
     'Extras' = @(
@@ -1347,13 +1608,25 @@ $ctrl.ApplyBtn.Add_Click({
     $ctrl.ApplyBtn.IsEnabled = $false
     Write-Log "Applying $($selected.Count) tweak(s)..."
     $done = 0; $fail = 0
+    $history = @(Get-TweakHistory)
     foreach ($cb in $selected) {
         $t = $cb.Tag
+        $tFailed = $false
+        $snapshots = New-Object System.Collections.ArrayList
         foreach ($a in $t.Actions) {
+            $snapshot = $null
+            try { $snapshot = Get-ActionSnapshot $a } catch { Write-Log "  ! Could not snapshot $($t.Name): $($_.Exception.Message)" }
+            if ($snapshot) { [void]$snapshots.Add($snapshot) }
             try { Invoke-TweakAction $a }
-            catch { $fail++; Write-Log "  ! $($t.Name): $($_.Exception.Message)" }
+            catch { $fail++; $tFailed = $true; Write-Log "  ! $($t.Name): $($_.Exception.Message)" }
         }
-        $done++
+        if ($snapshots.Count -gt 0) {
+            $entry = [pscustomobject]@{ Id=[guid]::NewGuid().ToString(); Date=(Get-Date).ToString('o'); Tweak=[string]$t.Name; Status=if ($tFailed) {'Partial'} else {'Applied'}; Actions=@($snapshots) }
+            $history += $entry
+            try { Save-TweakHistory $history } catch { Write-Log "  ! Could not persist tweak history: $($_.Exception.Message)" }
+        }
+        if (-not $tFailed) { $done++; Write-Log "  Completed: $($t.Name)" }
+        else { Write-Log "  Partial/failed: $($t.Name)" }
     }
     # restart explorer so taskbar/visual tweaks show
     try {
@@ -1361,7 +1634,7 @@ $ctrl.ApplyBtn.Add_Click({
         Start-Sleep -Seconds 2
         if (-not (Get-Process -Name explorer -ErrorAction SilentlyContinue)) { Start-Process explorer.exe }
     } catch {}
-    Write-Log "Done. Applied $done tweak(s)$(if($fail){", $fail action(s) had issues"}). Some changes need a reboot."
+    Write-Log "Finished: $done tweak(s) completed without reported errors; $fail action(s) failed. Check the log; some changes need a reboot."
     $ctrl.ApplyBtn.IsEnabled = $true
 })
 
@@ -1492,6 +1765,88 @@ $ctrl.ExtremeBtn.Add_Click({
     Write-Log "EXTREME: ticked $n tweaks across all tabs. Review them, then click 'Apply Selected Tweaks'."
 })
 
+function Update-HardwareDisplay {
+    try {
+        $report = Get-SystemInventory
+        $gpuLines = if (@($report.GPUs).Count) {
+            @($report.GPUs | ForEach-Object { "  $($_.Vendor): $($_.Name) | Driver $($_.DriverVersion)" }) -join "`r`n"
+        } else { '  No display adapters reported by WMI.' }
+        $diskLines = if (@($report.Disks).Count) {
+            @($report.Disks | ForEach-Object { "  $($_.FriendlyName) | $($_.MediaType) | $($_.SizeGB) GB | $($_.Health)" }) -join "`r`n"
+        } else { '  No physical disk inventory available.' }
+        $ctrl.HardwareSummary.Text = @"
+Computer: $($report.Manufacturer) $($report.Model)
+Operating system: $($report.OS)
+CPU: $($report.CPU)
+Cores / threads: $($report.Cores) / $($report.LogicalProcessors)
+Installed RAM: $($report.RAM_GB) GB
+Motherboard: $($report.Motherboard)
+BIOS: $($report.BIOS)
+GPUs:
+$gpuLines
+Storage:
+$diskLines
+"@
+        $cpuLoad = (Get-CimInstance Win32_Processor -ErrorAction Stop | Measure-Object -Property LoadPercentage -Average).Average
+        $os = Get-CimInstance Win32_OperatingSystem -ErrorAction Stop
+        $totalMem = [double]$os.TotalVisibleMemorySize
+        $freeMem = [double]$os.FreePhysicalMemory
+        $usedPct = if ($totalMem -gt 0) { [math]::Round((($totalMem-$freeMem)/$totalMem)*100,1) } else { 0 }
+        $usedGB = [math]::Round(($totalMem-$freeMem)/1MB,1)
+        $totalGB = [math]::Round($totalMem/1MB,1)
+        $ctrl.LiveMetrics.Text = "CPU load (WMI sample): $cpuLoad%`r`nMemory in use: $usedGB GB / $totalGB GB ($usedPct%)`r`nGPU utilization is driver/performance-counter dependent and is not guessed when unavailable."
+        Write-Log 'Hardware inventory refreshed.'
+    } catch {
+        $ctrl.HardwareSummary.Text = "Hardware detection failed: $($_.Exception.Message)"
+        Write-Log "Hardware detection failed: $($_.Exception.Message)"
+    }
+}
+$ctrl.HardwareRefreshBtn.Add_Click({ Update-HardwareDisplay })
+
+$ctrl.SystemReportBtn.Add_Click({
+    try {
+        $report = Get-SystemInventory
+        $reportPath = Join-Path ([Environment]::GetFolderPath('Desktop')) ("NullTweak-SystemReport-{0}.json" -f (Get-Date -Format 'yyyyMMdd-HHmmss'))
+        $report | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $reportPath -Encoding UTF8 -Force
+        Write-Log "System report saved: $reportPath"
+        Start-Process notepad.exe -ArgumentList "`"$reportPath`""
+    } catch { Write-Log "System report failed: $($_.Exception.Message)" }
+})
+$ctrl.HistoryBtn.Add_Click({
+    if (Test-Path -LiteralPath $script:HistoryPath) { Start-Process notepad.exe -ArgumentList "`"$($script:HistoryPath)`"" }
+    else { Write-Log 'No tracked tweak history exists yet.' }
+})
+$ctrl.RollbackBtn.Add_Click({
+    $history = @(Get-TweakHistory)
+    if (-not $history.Count) { Write-Log 'No tracked tweak changes are available to roll back.'; return }
+    $unsupportedEntries = @($history | Where-Object { @($_.Actions | Where-Object { $_.Type -eq 'Unsupported' }).Count -gt 0 })
+    $tracked = @($history | Where-Object { @($_.Actions | Where-Object { $_.Type -ne 'Unsupported' }).Count -gt 0 })
+    if (-not $tracked.Count) { Write-Log 'History contains no automatically reversible actions. Custom command actions need manual restoration.'; return }
+    $answer = [Windows.MessageBox]::Show("Restore the original values for $($tracked.Count) recorded tweak operation(s)? Custom command actions (including powercfg, adapter changes, TRIM and AppX operations) are not generically reversible; review their per-tweak recovery notes and use a restore point where necessary.", 'Rollback tracked registry, service and task tweaks', 'YesNo', 'Warning')
+    if ($answer -ne 'Yes') { return }
+    $restored = 0; $errors = 0
+    foreach ($entry in ($tracked | Sort-Object Date -Descending)) {
+        foreach ($snap in @($entry.Actions | Where-Object { $_.Type -ne 'Unsupported' })) {
+            try { Restore-ActionSnapshot $snap; $restored++ }
+            catch { $errors++; Write-Log "  ! Rollback $($entry.Tweak): $($_.Exception.Message)" }
+        }
+    }
+    # Retain entries for custom commands because they cannot be safely inferred
+    # or reversed generically; retain the entire journal when any restore fails.
+    if ($errors -eq 0) {
+        $remaining = @()
+        foreach ($entry in $unsupportedEntries) {
+            $manual = @($entry.Actions | Where-Object { $_.Type -eq 'Unsupported' })
+            if ($manual.Count -gt 0) {
+                $remaining += [pscustomobject]@{ Id=$entry.Id; Date=$entry.Date; Tweak=$entry.Tweak; Status='Manual rollback required'; Actions=$manual }
+                Write-Log "Manual rollback may be needed for custom action(s): $($entry.Tweak)"
+            }
+        }
+        Save-TweakHistory $remaining
+        Write-Log "Rollback completed: $restored tracked setting(s) restored. $($remaining.Count) custom action record(s) retained for manual review. Reboot may be required."
+    } else { Write-Log "Rollback partially completed: $restored restored, $errors failed. History retained for retry." }
+})
+
 $ctrl.FixXboxBtn.Add_Click({
     $tmp = Join-Path $env:TEMP 'NullTweak-fix-xbox.ps1'
     Set-Content -Path $tmp -Value $script:XboxFixScript -Encoding UTF8 -Force
@@ -1511,6 +1866,7 @@ $ctrl.Tabs.Add_SelectionChanged({
     $hdr = [string]$ctrl.Tabs.SelectedItem.Header
     if ($hdr -eq 'Restore Apps') { Load-Restore }
     elseif ($hdr -eq 'Debloat')  { Load-Bloat }
+    elseif ($hdr -eq 'Hardware') { Update-HardwareDisplay }
 })
 
 $ctrl.InstallAll.Add_Click({  foreach ($c in $script:InstallCheckBoxes) { $c.IsChecked = $true } })
@@ -1546,5 +1902,5 @@ $win.Add_PreviewMouseWheel({
     }
 })
 
-Write-Log "Detected $osLabel. Review the tabs, then Apply."
+Write-Log "Detected $osLabel. Hardware inventory is available from About > Generate System Report. Review the tabs, then Apply."
 $win.ShowDialog() | Out-Null
