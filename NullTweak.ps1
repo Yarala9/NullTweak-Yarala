@@ -505,6 +505,11 @@ $generalTweaks = @(
 
     @{ Name='Disable Windows Ink Workspace'; Default=$false; Desc='Pen workspace off (safe on non-touch).'
        Actions=@( (RegD "$HKLM\Policies\Microsoft\WindowsInkWorkspace" 'AllowWindowsInkWorkspace' 0) ) }
+
+    @{ Name='NumLock on at startup'; Default=$false; Desc='Turns NumLock on at the login screen and after boot.'
+       Actions=@(
+           (RegS 'HKCU:\Control Panel\Keyboard' 'InitialKeyboardIndicators' '2'),
+           (RegS 'Registry::HKEY_USERS\.DEFAULT\Control Panel\Keyboard' 'InitialKeyboardIndicators' '2') ) }
 )
 
 # ---- PRIVACY / TELEMETRY (O&O ShutUp10-style defaults, mostly ON) ----
@@ -731,6 +736,22 @@ $perfTweaks = @(
                 }
        } } ) }
 
+    @{ Name='Prefer IPv4 over IPv6'; Default=$false
+       Desc='Tells Windows to use IPv4 first (DisabledComponents = 0x20). Can help on IPv4-only game servers. Leave off if your network needs IPv6. Reboot required.'
+       Actions=@( (RegD 'HKLM:\SYSTEM\CurrentControlSet\Services\Tcpip6\Parameters' 'DisabledComponents' 0x20) ) }
+
+    @{ Name='Force maximum timer resolution'; Default=$true
+       Desc='Keeps the system timer at its highest resolution for every process - steadier frame pacing on Windows 11 24H2+. Harmless on older builds.'
+       Actions=@( (RegD 'HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager\kernel' 'GlobalTimerResolutionRequests' 1) ) }
+
+    @{ Name='Optimize windowed/borderless games (flip model)'; Default=$true
+       Desc='Enables the DirectX flip presentation path for windowed and borderless games - lower latency, closer to true fullscreen.'
+       Actions=@( (RegS 'HKCU:\Software\Microsoft\DirectX\UserGpuPreferences' 'DirectXUserGlobalSettings' 'SwapEffectUpgradeEnable=1;') ) }
+
+    @{ Name='Keep kernel in RAM (DisablePagingExecutive)'; Default=$false
+       Desc='Stops Windows paging kernel/driver code to disk - smoother on PCs with 8GB+ RAM. Leave off on low-memory systems.'
+       Actions=@( (RegD 'HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager\Memory Management' 'DisablePagingExecutive' 1) ) }
+
     @{ Name='Disable SysMain (Superfetch)'; Default=$false
        Desc='Stops background preloading. Good on SSDs to cut random disk/CPU usage; leave on for HDDs.'
        Actions=@( (Svc 'SysMain') ) }
@@ -762,12 +783,18 @@ $perfTweaks = @(
     @{ Name='Remove "Cast to Device" context menu'; Default=$false; Desc='Hide the Cast shell extension.'
        Actions=@( (RegS 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Shell Extensions\Blocked' '{7AD84985-87B4-4a16-BE58-8B72A5B390F7}' 'Play to menu') ) }
 
+    @{ Name='Disable Ndu (network usage monitor)'; Default=$false
+       Desc='Disables the Network Data Usage service. Known fix for Ndu''s non-paged memory leak that causes high RAM use on some PCs. You lose per-app data-usage stats in Task Manager.'
+       Actions=@( (RegD 'HKLM:\SYSTEM\CurrentControlSet\Services\Ndu' 'Start' 4) ) }
+
     @{ Name='Set non-essential services to Manual'; Default=$false
-       Desc='Sets a curated list of rarely-needed services to Manual (they start on demand). Conservative, reversible.'
+       Desc='Sets a curated list of rarely-needed services to Manual (they start on demand). Conservative and reversible - does NOT touch Windows Update, Task Scheduler or the time service.'
        Actions=@(
            (Svc 'MapsBroker' 'Manual'), (Svc 'RetailDemo' 'Manual'), (Svc 'RemoteRegistry' 'Disabled'),
            (Svc 'WbioSrvc' 'Manual'), (Svc 'Fax' 'Manual'), (Svc 'PhoneSvc' 'Manual'),
-           (Svc 'WpcMonSvc' 'Manual'), (Svc 'SharedAccess' 'Manual') ) }
+           (Svc 'WpcMonSvc' 'Manual'), (Svc 'SharedAccess' 'Manual'),
+           (Svc 'TrkWks' 'Manual'), (Svc 'NetTcpPortSharing' 'Disabled'), (Svc 'SCardSvr' 'Manual'),
+           (Svc 'WebClient' 'Manual'), (Svc 'MSiSCSI' 'Manual'), (Svc 'TimeBrokerSvc' 'Manual') ) }
 
     @{ Name='Disable Print Spooler  (!)'; Default=$false; Warn=$true
        Desc='(!) Disables printing entirely. Only if you never print.'
