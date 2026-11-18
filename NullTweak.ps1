@@ -347,6 +347,20 @@ $xaml = @'
                     </Border>
                 </Grid>
             </TabItem>
+            <TabItem Header="Repairs">
+                <ScrollViewer VerticalScrollBarVisibility="Auto" Padding="22,16">
+                    <StackPanel>
+                        <TextBlock Text="Windows repair tools" Foreground="#FFE4E4E6" FontSize="15" FontWeight="SemiBold"/>
+                        <TextBlock Text="Run built-in Windows diagnostics when something is broken. These are repair actions, not performance tweaks." Foreground="#FF9A9AA2" FontSize="12" TextWrapping="Wrap" Margin="0,8,0,14"/>
+                        <Button Name="DismRepairBtn" Style="{StaticResource Accent}" Content="Repair Windows image (DISM + SFC)" HorizontalAlignment="Left"/>
+                        <Button Name="NetworkRepairBtn" Style="{StaticResource Ghost}" Content="Reset network stack (Winsock + TCP/IP)" HorizontalAlignment="Left" Margin="0,8,0,0"/>
+                        <Button Name="DnsFlushBtn" Style="{StaticResource Ghost}" Content="Flush DNS cache" HorizontalAlignment="Left" Margin="0,8,0,0"/>
+                        <Button Name="WindowsUpdateRepairBtn" Style="{StaticResource Ghost}" Content="Repair Windows Update components" HorizontalAlignment="Left" Margin="0,8,0,0"/>
+                        <TextBlock Text="Network stack reset and Windows Update repair require a restart and may reset custom network / update state." Foreground="#FFCF8A5A" FontSize="11" TextWrapping="Wrap" Margin="0,14,0,0"/>
+                    </StackPanel>
+                </ScrollViewer>
+            </TabItem>
+
             <TabItem Header="About">
                 <ScrollViewer VerticalScrollBarVisibility="Auto" Padding="22,16">
                     <StackPanel>
@@ -356,12 +370,12 @@ $xaml = @'
                         <TextBlock Foreground="#FF9A9AA2" FontSize="12" TextWrapping="Wrap" Margin="0,12,0,0"
                                    Text="Registry, service and scheduled-task changes are journaled for rollback. Custom commands and AppX removals may require their own recovery path. Create a restore point before applying changes."/>
                         <TextBlock Foreground="#FFCF8A5A" FontSize="12" TextWrapping="Wrap" Margin="0,12,0,0"
-                                   Text="Items marked (!) reduce a security or safety feature (e.g. SmartScreen, Core Isolation, Defender). They are opt-in and disabled by default. Only enable them if you understand the trade-off."/>
+                                   Text="SmartScreen and Core Isolation / Memory Integrity are automatically kept enabled by NullTweak. They are not available as disable tweaks."/>
 
                         <Border Height="1" Background="#FF2E2E34" Margin="0,20,0,16"/>
                         <TextBlock Foreground="#FFE4E4E6" FontSize="14" FontWeight="SemiBold" Text="Extreme mode"/>
                         <TextBlock Foreground="#FF9A9AA2" FontSize="12" TextWrapping="Wrap" Margin="0,6,0,10"
-                                   Text="Ticks every tweak across all tabs at once - privacy, performance, visual effects, services, Win 10/11 - for maximum speed on old or weak PCs. It won't auto-disable Windows Defender. Nothing is applied until you click 'Apply Selected Tweaks'."/>
+                                   Text="Ticks every available tweak across all tabs at once. SmartScreen, Core Isolation / Memory Integrity and Xbox services are protected and will not be disabled. Nothing is applied until you click 'Apply Selected Tweaks'."/>
                         <Button Name="ExtremeBtn" Style="{StaticResource Danger}"
                                 Content="EXTREME - select everything" HorizontalAlignment="Left"/>
                         <StackPanel Orientation="Horizontal" Margin="0,14,0,0">
@@ -411,7 +425,8 @@ foreach ($n in 'Tabs','OsLabel','GeneralPanel','VersionPanel','VersionTab','Priv
                 'BloatAll','BloatNone','BloatRefresh',
                 'InstallPanel','InstallBtn','InstallAll','InstallNone',
                 'ReinstallPanel','ReinstallBtn','ReinstallAll','ReinstallNone','ReinstallShowAll','ReinstallHeader',
-                'FixXboxBtn','ExtremeBtn','SystemReportBtn','HistoryBtn','RollbackBtn','HardwareSummary','HardwareRefreshBtn','LiveMetrics') {
+                'FixXboxBtn','ExtremeBtn','SystemReportBtn','HistoryBtn','RollbackBtn','HardwareSummary','HardwareRefreshBtn','LiveMetrics',
+                'DismRepairBtn','NetworkRepairBtn','DnsFlushBtn','WindowsUpdateRepairBtn') {
     $ctrl[$n] = $win.FindName($n)
 }
 $ctrl.OsLabel.Text        = $osLabel
@@ -610,9 +625,33 @@ function Restore-ActionSnapshot($snap) {
     }
 }
 
+# Keep the two Windows protections explicitly requested by the user enabled.
+# These settings are enforced on every launch and are intentionally not exposed
+# as disable toggles or included in the normal tweak rollback journal.
+function Ensure-WindowsProtections {
+    $settings = @(
+        @{ Path='HKLM:\SOFTWARE\Policies\Microsoft\Windows\System'; Name='EnableSmartScreen'; Type='DWord'; Value=1 },
+        @{ Path='HKLM:\SOFTWARE\Policies\Microsoft\Windows\System'; Name='ShellSmartScreenLevel'; Type='String'; Value='Warn' },
+        @{ Path='HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer'; Name='SmartScreenEnabled'; Type='String'; Value='Warn' },
+        @{ Path='HKLM:\SYSTEM\CurrentControlSet\Control\DeviceGuard'; Name='EnableVirtualizationBasedSecurity'; Type='DWord'; Value=1 },
+        @{ Path='HKLM:\SYSTEM\CurrentControlSet\Control\DeviceGuard\Scenarios\HypervisorEnforcedCodeIntegrity'; Name='Enabled'; Type='DWord'; Value=1 }
+    )
+    foreach ($setting in $settings) {
+        try {
+            Set-Reg -Path $setting.Path -Name $setting.Name -Type $setting.Type -Value $setting.Value
+        } catch {
+            Write-Log "Could not enforce $($setting.Name): $($_.Exception.Message)"
+        }
+    }
+    Write-Log 'SmartScreen and Core Isolation / Memory Integrity are configured ON. A restart may be required; HVCI also depends on compatible drivers and firmware virtualization support.'
+}
+
 # Common roots
 $HKCU = 'HKCU:\Software'
 $HKLM = 'HKLM:\SOFTWARE'
+
+# Enforce the requested Windows protection baseline at startup.
+Ensure-WindowsProtections
 
 # ---------------------------------------------------------------------------
 # 8. Tweak catalog
@@ -760,15 +799,17 @@ $privacyTweaks = @(
     @{ Name='Disable Visual Studio telemetry'; Default=$true; Desc='Opt out of VS SQM.'
        Actions=@( (RegD "$HKLM\Policies\Microsoft\VisualStudio\SQM" 'OptIn' 0) ) }
 
-    @{ Name='Disable SmartScreen  (!)'; Default=$false; Warn=$true
-       Desc='(!) Turns off SmartScreen app/file reputation checks. Reduces protection against malicious downloads.'
-       Actions=@(
-           (RegD "$HKLM\Policies\Microsoft\Windows\System" 'EnableSmartScreen' 0),
-           (RegS 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer' 'SmartScreenEnabled' 'Off') ) }
 )
 
 # ---- PERFORMANCE ----
 $perfTweaks = @(
+    @{ Name='Disable Windows power throttling'; Default=$false
+       Desc='Prevents Windows from applying EcoQoS power throttling to background processes. Can increase power use and heat; compare before/after on your workload.'
+       Actions=@( (RegD 'HKLM:\SYSTEM\CurrentControlSet\Control\Power\PowerThrottling' 'PowerThrottlingOff' 1) ) }
+
+    @{ Name='Disable peer-to-peer Windows Update sharing'; Default=$false
+       Desc='Stops this PC from uploading Windows Update / Store content to other PCs. Keeps normal downloads and Windows Update working.'
+       Actions=@( (RegD 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\DeliveryOptimization' 'DODownloadMode' 0) ) }
     @{ Name='NullTweak High Performance power plan'; Default=$false
        Desc='Creates a separate high-performance plan. Keeps CPU minimum at 5% (not permanently pinned at 100%), enables boost and reduces core parking on AC power. USB/PCIe power saving is disabled on AC; your existing plan remains available to switch back.'
        Actions=@( @{ Type='Cmd'; Script={
@@ -1059,14 +1100,6 @@ $perfTweaks = @(
 
 # ---- ADVANCED (security trade-offs / power-user) ----
 $advancedTweaks = @(
-    @{ Name='Disable Core Isolation / Memory Integrity  (!)'; Default=$false; Warn=$true
-       Desc='(!) Disables HVCI. This lowers kernel protection; performance impact varies and is often negligible. Reboot required.'
-       Actions=@( (RegD 'HKLM:\SYSTEM\CurrentControlSet\Control\DeviceGuard\Scenarios\HypervisorEnforcedCodeIntegrity' 'Enabled' 0) ) }
-
-    @{ Name='Disable Virtualization Based Security  (!)'; Default=$false; Warn=$true
-       Desc='(!) Turns off VBS. Can improve performance; lowers security. Reboot required.'
-       Actions=@( (RegD 'HKLM:\SYSTEM\CurrentControlSet\Control\DeviceGuard' 'EnableVirtualizationBasedSecurity' 0) ) }
-
     @{ Name='Disable Modern Standby (S0)'; Default=$false
        Desc='Forces legacy sleep handling (PlatformAoAcOverride). Helps some desktops.'
        Actions=@( (RegD 'HKLM:\SYSTEM\CurrentControlSet\Control\Power' 'PlatformAoAcOverride' 0) ) }
@@ -1752,6 +1785,70 @@ if ($ok) {{ Write-Host '   Reinstalled.' -ForegroundColor Green }} else {{ Write
     Write-Log "Launched reinstall window for $($sel.Count) app(s). Watch that window for progress."
 })
 
+$ctrl.DismRepairBtn.Add_Click({
+    $r = [Windows.MessageBox]::Show('Run DISM RestoreHealth followed by SFC /scannow? This can take several minutes.', 'Windows image repair', 'YesNo', 'Question')
+    if ($r -ne 'Yes') { return }
+    $scriptText = @'
+Write-Host 'Running DISM RestoreHealth...' -ForegroundColor Cyan
+DISM.exe /Online /Cleanup-Image /RestoreHealth
+if ($LASTEXITCODE -ne 0) { Write-Host "DISM returned exit code $LASTEXITCODE" -ForegroundColor Yellow }
+Write-Host 'Running System File Checker...' -ForegroundColor Cyan
+sfc.exe /scannow
+Write-Host 'Repair sequence finished. Review the output above.' -ForegroundColor Green
+Read-Host 'Press Enter to close'
+'@
+    $tmp = Join-Path $env:TEMP 'NullTweak-WindowsRepair.ps1'
+    Set-Content -LiteralPath $tmp -Value $scriptText -Encoding UTF8 -Force
+    Start-Process powershell.exe -ArgumentList '-NoExit','-NoProfile','-ExecutionPolicy','Bypass','-File',"`"$tmp`"" | Out-Null
+    Write-Log 'Launched DISM + SFC repair console.'
+})
+
+$ctrl.NetworkRepairBtn.Add_Click({
+    $r = [Windows.MessageBox]::Show('Reset Winsock and TCP/IP. This can disconnect you and may require a restart. Continue?', 'Network stack reset', 'YesNo', 'Warning')
+    if ($r -ne 'Yes') { return }
+    try {
+        netsh winsock reset
+        if ($LASTEXITCODE -ne 0) { throw 'Winsock reset failed.' }
+        netsh int ip reset
+        if ($LASTEXITCODE -ne 0) { throw 'TCP/IP reset failed.' }
+        Write-Log 'Network stack reset commands completed. Restart Windows to finish.'
+    } catch { Write-Log "Network reset failed: $($_.Exception.Message)" }
+})
+
+$ctrl.DnsFlushBtn.Add_Click({
+    try {
+        ipconfig.exe /flushdns | Out-Null
+        if ($LASTEXITCODE -ne 0) { throw 'ipconfig /flushdns failed.' }
+        Write-Log 'DNS resolver cache flushed successfully.'
+    } catch { Write-Log "DNS flush failed: $($_.Exception.Message)" }
+})
+
+$ctrl.WindowsUpdateRepairBtn.Add_Click({
+    $r = [Windows.MessageBox]::Show('Stop Windows Update services, rename the SoftwareDistribution and catroot2 caches, then restart the services? Windows will rebuild these caches. Continue?', 'Windows Update repair', 'YesNo', 'Warning')
+    if ($r -ne 'Yes') { return }
+    $scriptText = @'
+$ErrorActionPreference = 'Stop'
+$services = @('bits','wuauserv','cryptsvc','msiserver')
+try {
+    foreach ($name in $services) { Stop-Service -Name $name -Force -ErrorAction SilentlyContinue }
+    Start-Sleep -Seconds 2
+    $stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
+    if (Test-Path "$env:windir\SoftwareDistribution") { Rename-Item "$env:windir\SoftwareDistribution" "SoftwareDistribution.NullTweak-$stamp" -ErrorAction Stop }
+    if (Test-Path "$env:windir\System32\catroot2") { Rename-Item "$env:windir\System32\catroot2" "catroot2.NullTweak-$stamp" -ErrorAction Stop }
+    Write-Host 'Windows Update cache reset completed. Windows will recreate the folders.' -ForegroundColor Green
+} catch {
+    Write-Host "Windows Update repair failed: $($_.Exception.Message)" -ForegroundColor Red
+} finally {
+    foreach ($name in $services) { Start-Service -Name $name -ErrorAction SilentlyContinue }
+}
+Read-Host 'Press Enter to close'
+'@
+    $tmp = Join-Path $env:TEMP 'NullTweak-WindowsUpdateRepair.ps1'
+    Set-Content -LiteralPath $tmp -Value $scriptText -Encoding UTF8 -Force
+    Start-Process powershell.exe -ArgumentList '-NoExit','-NoProfile','-ExecutionPolicy','Bypass','-File',"`"$tmp`"" | Out-Null
+    Write-Log 'Launched Windows Update component repair console.'
+})
+
 $ctrl.ExtremeBtn.Add_Click({
     $msg = "EXTREME mode ticks EVERY tweak across all tabs (privacy, performance, visual effects, services, Win 10/11) for maximum speed - meant for old or weak PCs.`n`n" +
            "It will NOT auto-disable Windows Defender. Nothing changes until you click 'Apply Selected Tweaks'.`n`n" +
@@ -1902,5 +1999,5 @@ $win.Add_PreviewMouseWheel({
     }
 })
 
-Write-Log "Detected $osLabel. Hardware inventory is available from About > Generate System Report. Review the tabs, then Apply."
+Write-Log "Detected $osLabel. Hardware inventory is available from About > Generate System Report. SmartScreen and Memory Integrity are protected and configured ON. Review the tabs, then Apply."
 $win.ShowDialog() | Out-Null
